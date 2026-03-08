@@ -1,0 +1,716 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import re
+import sys
+from datetime import date
+from pathlib import Path
+
+# ── Data storage ───────────────────────────────────────────────────────────────
+XP_FILE = Path.home() / ".xp.json"
+
+def load_db():
+    if XP_FILE.exists():
+        with open(XP_FILE) as f:
+            db = json.load(f)
+        # migrate old 'techs' top-level key to 'skills'
+        if "techs" in db and "skills" not in db:
+            db["skills"] = db.pop("techs")
+        db.setdefault("skills", [])
+        return db
+    return {"skills": [], "industries": [], "functionals": [], "projects": []}
+
+def save_db(db):
+    with open(XP_FILE, "w") as f:
+        json.dump(db, f, indent=2)
+
+def next_id(items):
+    if not items:
+        return 1
+    return max(i["id"] for i in items) + 1
+
+# ── ANSI colours ───────────────────────────────────────────────────────────────
+RESET   = "\033[0m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
+
+RED     = "\033[91m"
+YELLOW  = "\033[93m"
+GREEN   = "\033[92m"
+CYAN    = "\033[96m"
+BLUE    = "\033[94m"
+MAGENTA = "\033[95m"
+WHITE   = "\033[97m"
+GRAY    = "\033[90m"
+
+def colorize(text, *codes):
+    return "".join(codes) + text + RESET
+
+def term_width():
+    try:
+        return os.get_terminal_size().columns
+    except Exception:
+        return 72
+
+def divider():
+    w = min(term_width(), 80)
+    print(colorize("  " + "─" * (w - 4), GRAY))
+
+# ── Prompt helpers ─────────────────────────────────────────────────────────────
+def prompt(label, required=True, hint="", default=""):
+    full = colorize(label, CYAN + BOLD)
+    if hint:
+        full += colorize(f" ({hint})", GRAY)
+    if default:
+        full += colorize(f" [{default}]", GRAY)
+    full += colorize(" › ", GRAY)
+    while True:
+        try:
+            val = input(full).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if not val and default:
+            return default
+        if not val and not required:
+            return ""
+        if not val:
+            print(colorize("  ✗  This field is required.", RED))
+            continue
+        return val
+
+def prompt_multiline(label, hint="", default=""):
+    print()
+    print(colorize(f"  {label}", CYAN + BOLD) +
+          colorize(" (empty line to finish)", GRAY))
+    if default:
+        print(colorize("  Current:", GRAY))
+        for line in default.split("\n"):
+            print(colorize(f"  ╎ {line}", DIM + WHITE))
+        print(colorize("  Enter new text, or just an empty line to keep current:", GRAY))
+    lines = []
+    try:
+        while True:
+            line = input(colorize("  ╎ ", GRAY))
+            if line == "" and lines:
+                break
+            if line == "" and not lines:
+                if default:
+                    return default.replace("\n", " ")
+                break
+            lines.append(line)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(0)
+    return " ".join(lines)
+
+def prompt_month_year(default_month=None, default_year=None):
+    months_map = {
+        "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+        "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12,
+        "january":1,"february":2,"march":3,"april":4,"june":6,
+        "july":7,"august":8,"september":9,"october":10,"november":11,"december":12
+    }
+    default_str = f"{default_month:02d}/{default_year}" if default_month and default_year else ""
+    while True:
+        raw = prompt("Month and Year", hint="e.g. 03/2024 or March 2024",
+                     default=default_str).strip().lower()
+        m = re.match(r'^(\d{1,2})[/\-](\d{4})$', raw)
+        if m:
+            mo, yr = int(m.group(1)), int(m.group(2))
+            if 1 <= mo <= 12:
+                return mo, yr
+        m = re.match(r'^(\d{4})[/\-](\d{1,2})$', raw)
+        if m:
+            yr, mo = int(m.group(1)), int(m.group(2))
+            if 1 <= mo <= 12:
+                return mo, yr
+        m = re.match(r'^([a-z]+)\s+(\d{4})$', raw)
+        if m and m.group(1) in months_map:
+            return months_map[m.group(1)], int(m.group(2))
+        m = re.match(r'^(\d{4})\s+([a-z]+)$', raw)
+        if m and m.group(2) in months_map:
+            return months_map[m.group(2)], int(m.group(1))
+        print(colorize(f'  ✗  Could not understand "{raw}". Try: 03/2024 or March 2024', RED))
+
+# ── Taxonomy selection with inline add ────────────────────────────────────────
+def _add_inline(kind, db):
+    kind_label = {"skills": "Skill", "industries": "Industry", "functionals": "Functional area"}[kind]
+    raw = prompt(f"New {kind_label}", hint="comma-separated")
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    existing = {i["name"].lower() for i in db[kind]}
+    for name in names:
+        if name.lower() not in existing:
+            db[kind].append({"id": next_id(db[kind]), "name": name})
+            existing.add(name.lower())
+            print(colorize(f"  ✓  Added: {name}", GREEN))
+    save_db(db)
+    return db
+
+def prompt_select_one(label, kind, db):
+    while True:
+        options = db[kind]
+        print()
+        print(colorize(f"  {label}", BOLD + WHITE))
+        divider()
+        for i, opt in enumerate(options, 1):
+            print(f"  {colorize(str(i), CYAN + BOLD)}  {colorize(opt['name'], WHITE)}")
+        print(f"  {colorize('N', CYAN + BOLD)}  {colorize('Add new…', GRAY)}")
+        print()
+        raw = prompt("Select one", hint=f"1–{len(options)} or N").strip().lower()
+        if raw == "n":
+            db = _add_inline(kind, db)
+            continue
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(options):
+                return options[idx], db
+            print(colorize(f"  ✗  Enter a number between 1 and {len(options)}, or N.", RED))
+        except ValueError:
+            print(colorize("  ✗  Enter a number or N.", RED))
+
+def prompt_select_many(label, kind, db, preselected=None):
+    preselected = preselected or []
+    while True:
+        options = db[kind]
+        print()
+        print(colorize(f"  {label}", BOLD + WHITE))
+        divider()
+        for i, opt in enumerate(options, 1):
+            marker = colorize(" ✓", GREEN) if opt["name"] in preselected else "  "
+            print(f"  {colorize(str(i), CYAN + BOLD)}{marker}  {colorize(opt['name'], WHITE)}")
+        print(f"  {colorize('N', CYAN + BOLD)}    {colorize('Add new…', GRAY)}")
+        print()
+        raw = prompt("Select one or more", hint="e.g. 1,3 or N").strip().lower()
+        if raw == "n":
+            db = _add_inline(kind, db)
+            continue
+        parts = [p.strip() for p in raw.split(",")]
+        selected = []
+        valid = True
+        for p in parts:
+            try:
+                idx = int(p) - 1
+                if 0 <= idx < len(options):
+                    if options[idx] not in selected:
+                        selected.append(options[idx])
+                else:
+                    print(colorize(f"  ✗  '{p}' is out of range (1–{len(options)}).", RED))
+                    valid = False
+                    break
+            except ValueError:
+                print(colorize(f"  ✗  '{p}' is not a valid number.", RED))
+                valid = False
+                break
+        if valid and selected:
+            return selected, db
+
+# ── Display helpers ────────────────────────────────────────────────────────────
+MONTH_NAMES = ["","January","February","March","April","May","June",
+               "July","August","September","October","November","December"]
+
+def fmt_period(month, year):
+    return f"{MONTH_NAMES[month]} {year}"
+
+def _footer():
+    print(colorize(
+        "  xp add · xp full · xp filter <term> · xp export · xp summary · "
+        "xp <id> detail · xp <id> edit · xp <id> delete", GRAY))
+    print()
+
+# ── Taxonomy management ────────────────────────────────────────────────────────
+def add_taxonomy(kind):
+    db         = load_db()
+    items      = db[kind]
+    kind_label = {"skills": "Skill", "industries": "Industry", "functionals": "Functional area"}[kind]
+
+    print()
+    print(colorize(f"  ✦  Add {kind_label}", BOLD + WHITE))
+    print(colorize("  Enter multiple values separated by commas.\n", GRAY))
+
+    raw   = prompt(kind_label, hint="comma-separated")
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+
+    added    = []
+    skipped  = []
+    existing = {i["name"].lower() for i in items}
+
+    for name in names:
+        if name.lower() in existing:
+            skipped.append(name)
+        else:
+            items.append({"id": next_id(items), "name": name})
+            added.append(name)
+            existing.add(name.lower())
+
+    db[kind] = items
+    save_db(db)
+
+    print()
+    for name in added:
+        print(colorize(f"  ✓  {name}", GREEN + BOLD))
+    for name in skipped:
+        print(colorize(f"  ·  {name} already exists, skipped.", YELLOW))
+    print()
+    _footer()
+
+def list_taxonomy(kind):
+    db    = load_db()
+    items = db[kind]
+    label = {"skills": "Skills", "industries": "Industries", "functionals": "Functional Areas"}[kind]
+
+    print()
+    print(colorize(f"  {label}", BOLD + WHITE))
+    divider()
+    if not items:
+        print(colorize("  No entries yet.", GRAY + DIM))
+    else:
+        for item in sorted(items, key=lambda x: x["name"].lower()):
+            print(f"  {colorize(str(item['id']), GRAY + DIM)}  {colorize(item['name'], WHITE)}")
+    print()
+    _footer()
+
+# ── Collect project fields ─────────────────────────────────────────────────────
+def collect_project_fields(db, existing=None):
+    e = existing or {}
+
+    project_name = prompt("Project name",  default=e.get("name", ""))
+    client       = prompt("Client name",   default=e.get("client", ""))
+    employer     = prompt("Employer name", default=e.get("employer", ""))
+    role         = prompt("Your role",     default=e.get("role", ""))
+    month, year  = prompt_month_year(e.get("month"), e.get("year"))
+
+    functionals, db = prompt_select_many(
+        "Functional areas", "functionals", db, preselected=e.get("functionals", []))
+
+    industry, db = prompt_select_one("Industry", "industries", db)
+
+    skills, db = prompt_select_many(
+        "Skills", "skills", db, preselected=e.get("skills", e.get("techs", [])))
+
+    print()
+    print(colorize("  ── Narrative fields ──────────────────────────────────────", GRAY))
+
+    problem  = prompt_multiline("Business problem",  default=e.get("problem", ""))
+    solution = prompt_multiline("Solution provided", default=e.get("solution", ""))
+    results  = prompt_multiline("Results",           default=e.get("results", ""))
+    lessons  = prompt_multiline("Lessons learned",   default=e.get("lessons", ""))
+
+    return {
+        "name":        project_name,
+        "client":      client,
+        "employer":    employer,
+        "role":        role,
+        "month":       month,
+        "year":        year,
+        "functionals": [f["name"] for f in functionals],
+        "industry":    industry["name"],
+        "skills":      [s["name"] for s in skills],
+        "problem":     problem,
+        "solution":    solution,
+        "results":     results,
+        "lessons":     lessons,
+    }, db
+
+# ── Add project ────────────────────────────────────────────────────────────────
+def add_project():
+    db = load_db()
+    print()
+    print(colorize("  ✦  Add a Project", BOLD + WHITE))
+    print(colorize("  Press Ctrl+C to cancel.\n", GRAY))
+
+    fields, db = collect_project_fields(db)
+    project = {"id": next_id(db["projects"]), "created_on": date.today().isoformat(), **fields}
+    db["projects"].append(project)
+    save_db(db)
+
+    print()
+    print(colorize(f"  ✓  #{project['id']} {project['name']}", GREEN + BOLD) +
+          colorize(f"  ·  {project['client']}  ·  {fmt_period(project['month'], project['year'])}", GRAY))
+    print()
+    _footer()
+
+# ── Edit project ───────────────────────────────────────────────────────────────
+def edit_project(pid):
+    db    = load_db()
+    match = next((p for p in db["projects"] if p["id"] == pid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No project with id #{pid}.\n", RED))
+        return
+
+    print()
+    print(colorize(f"  ✎  Edit #{pid}: {match['name']}", BOLD + WHITE))
+    print(colorize("  Press Enter to keep current value. Ctrl+C to cancel.\n", GRAY))
+
+    fields, db = collect_project_fields(db, existing=match)
+    match.update(fields)
+    match["updated_on"] = date.today().isoformat()
+    save_db(db)
+
+    print()
+    print(colorize(f"  ✓  #{pid} updated.", GREEN + BOLD))
+    print()
+    _footer()
+
+# ── Print helpers ──────────────────────────────────────────────────────────────
+def _print_compact(p):
+    """Main list: id · name · client · date · functional tags only."""
+    pid       = p["id"]
+    period    = fmt_period(p["month"], p["year"])
+    func_tags = "  ".join(colorize(f"[{f}]", GREEN + DIM) for f in p["functionals"])
+    print()
+    print(f"  {colorize(f'#{pid:<3}', GRAY + DIM)}  "
+          f"{colorize(p['name'], BOLD + WHITE)}  {colorize('·', GRAY)}  {colorize(p['client'], CYAN)}"
+          f"  {colorize('·', GRAY)}  {colorize(period, GRAY)}")
+    print(f"         {func_tags}")
+
+def _print_detail(p):
+    """Full detail with all fields. Multiline text aligned under the label."""
+    LABEL_INDENT = "         "   # 9 spaces — matches tag rows
+    TEXT_INDENT  = "           "  # 11 spaces — 2 more, aligns under label text
+
+    def ml(label, text, color):
+        if not text:
+            return
+        w = min(term_width(), 80) - len(TEXT_INDENT)
+        print(f"{LABEL_INDENT}{colorize(label, color + BOLD)}")
+        # word-wrap each stored line
+        for raw_line in text.split("\n"):
+            words   = raw_line.split(" ") if raw_line else [""]
+            cur     = ""
+            for word in words:
+                if cur and len(cur) + 1 + len(word) > w:
+                    print(f"{TEXT_INDENT}{colorize(cur, color + DIM)}")
+                    cur = word
+                else:
+                    cur = (cur + " " + word).lstrip()
+            if cur:
+                print(f"{TEXT_INDENT}{colorize(cur, color + DIM)}")
+
+    pid = p["id"]
+    print()
+    print(f"  {colorize(f'#{pid:<3}', GRAY + DIM)}  "
+          f"{colorize(p['name'], BOLD + WHITE)}  {colorize('·', GRAY)}  {colorize(p['client'], CYAN)}")
+    print(f"         {colorize(p['employer'], MAGENTA)}  {colorize('·', GRAY)}  "
+          f"{colorize(fmt_period(p['month'], p['year']), GRAY)}")
+    if p.get("role"):
+        print(f"         {colorize(p['role'], WHITE + DIM)}")
+    print(f"         {colorize(p['industry'], YELLOW)}")
+    print(f"         {'  '.join(colorize(f'[{f}]', GREEN + DIM) for f in p['functionals'])}")
+    print(f"         {'  '.join(colorize(f'[{t}]', BLUE + DIM) for t in p.get('skills', p.get('techs', [])))}")
+
+    ml("Problem:",  p.get("problem", ""),  RED)
+    ml("Solution:", p.get("solution", ""), CYAN)
+    ml("Results:",  p.get("results", ""),  YELLOW)
+    ml("Lessons:",  p.get("lessons", ""),  GREEN)
+
+# ── Detail command ─────────────────────────────────────────────────────────────
+def detail_project(pid):
+    db    = load_db()
+    match = next((p for p in db["projects"] if p["id"] == pid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No project with id #{pid}.\n", RED))
+        return
+    print()
+    print(colorize("  ◈  Project Detail", BOLD + WHITE))
+    divider()
+    _print_detail(match)
+    print()
+    divider()
+    _footer()
+
+# ── List projects ──────────────────────────────────────────────────────────────
+# ── Export to Markdown ─────────────────────────────────────────────────────────
+def export_projects():
+    db       = load_db()
+    projects = sorted(db["projects"], key=lambda p: (p["year"], p["month"]))
+
+    if not projects:
+        print(colorize("\n  No projects to export.\n", GRAY + DIM))
+        _footer()
+        return
+
+    today    = date.today().strftime("%Y-%m-%d")
+    filename = f"xp-export-{today}.md"
+    filepath = Path.cwd() / filename
+
+    lines = []
+    lines.append(f"# Experience Export\n")
+    lines.append(f"*Generated on {today} · {len(projects)} project{'s' if len(projects) != 1 else ''}*\n")
+    lines.append("")
+
+    for p in projects:
+        lines.append(f"---\n")
+        lines.append(f"## {p['name']}\n")
+        lines.append(f"**Client:** {p['client']}  ")
+        lines.append(f"**Employer:** {p['employer']}  ")
+        if p.get("role"):
+            lines.append(f"**Role:** {p['role']}  ")
+        lines.append(f"**Period:** {fmt_period(p['month'], p['year'])}  ")
+        lines.append(f"**Industry:** {p['industry']}\n")
+
+        if p.get("functionals"):
+            lines.append(f"**Functional areas:** {', '.join(p['functionals'])}\n")
+        if p.get("skills"):
+            lines.append(f"**Skills:** {', '.join(p['skills'])}\n")
+
+        if p.get("problem"):
+            lines.append(f"\n### Business Problem\n\n{p['problem']}\n")
+        if p.get("solution"):
+            lines.append(f"\n### Solution\n\n{p['solution']}\n")
+        if p.get("results"):
+            lines.append(f"\n### Results\n\n{p['results']}\n")
+        lines.append("")
+
+    with open(filepath, "w") as f:
+        f.write("\n".join(lines))
+
+    print()
+    print(colorize(f"  ✓  Exported {len(projects)} project{'s' if len(projects) != 1 else ''} to ", GREEN + BOLD) +
+          colorize(str(filepath), CYAN))
+    print()
+    _footer()
+
+# ── Filter (full-text search across all fields) ────────────────────────────────
+def filter_projects(term):
+    db       = load_db()
+    projects = db["projects"]
+    q        = term.lower()
+
+    def matches(p):
+        fields = [
+            p.get("name", ""),
+            p.get("client", ""),
+            p.get("employer", ""),
+            p.get("role", ""),
+            p.get("industry", ""),
+            p.get("problem", ""),
+            p.get("solution", ""),
+            p.get("results", ""),
+            p.get("lessons", p.get("results", "")),
+        ] + p.get("functionals", []) + p.get("skills", [])
+        return any(q in f.lower() for f in fields)
+
+    results = sorted(
+        [p for p in projects if matches(p)],
+        key=lambda p: (p["year"], p["month"])
+    )
+
+    print()
+    print(colorize("  ◈  Filter: ", BOLD + WHITE) + colorize(term, BOLD + CYAN))
+    divider()
+
+    if not results:
+        print(colorize(f"\n  No projects match '{term}'.\n", GRAY + DIM))
+    else:
+        for p in results:
+            _print_compact(p)
+        print()
+        divider()
+        print(colorize(f"  {len(results)} match{'es' if len(results) != 1 else ''}", GRAY))
+
+    print()
+    _footer()
+
+# ── Main screen ────────────────────────────────────────────────────────────────
+def show_main():
+    db       = load_db()
+    projects = sorted(db["projects"], key=lambda p: (p["year"], p["month"]))
+
+    print()
+    print(colorize("  ◈  Experience", BOLD + WHITE))
+    divider()
+
+    if not projects:
+        print(colorize("\n  No projects yet. Run ", GRAY) +
+              colorize("xp add", CYAN + BOLD) +
+              colorize(" to add one.\n", GRAY))
+    else:
+        for p in projects:
+            _print_compact(p)
+        print()
+        divider()
+        print(colorize(f"  {len(projects)} project{'s' if len(projects) != 1 else ''}", GRAY))
+
+    print()
+    _footer()
+
+
+def show_full():
+    db       = load_db()
+    projects = sorted(db["projects"], key=lambda p: (p["year"], p["month"]))
+
+    print()
+    print(colorize("  ◈  Experience — Full View", BOLD + WHITE))
+    divider()
+
+    if not projects:
+        print(colorize("\n  No projects yet. Run ", GRAY) +
+              colorize("xp add", CYAN + BOLD) +
+              colorize(" to add one.\n", GRAY))
+    else:
+        for p in projects:
+            _print_detail(p)
+            print()
+            divider()
+        print(colorize(f"  {len(projects)} project{'s' if len(projects) != 1 else ''}", GRAY))
+
+    print()
+    _footer()
+
+
+# ── Delete project ─────────────────────────────────────────────────────────────
+def delete_project(pid):
+    db    = load_db()
+    match = next((p for p in db["projects"] if p["id"] == pid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No project with id #{pid}.\n", RED))
+        return
+    print()
+    confirm = input(
+        colorize("  Delete ", GRAY) +
+        colorize(f"#{pid} {match['name']}", BOLD + WHITE) +
+        colorize("? y/N › ", GRAY)
+    ).strip().lower()
+    if confirm in ("y", "yes"):
+        db["projects"] = [p for p in db["projects"] if p["id"] != pid]
+        save_db(db)
+        print(colorize(f"  ✓  #{pid} deleted.\n", GREEN))
+    else:
+        print(colorize("  Cancelled.\n", GRAY))
+    _footer()
+
+# ── Summary ────────────────────────────────────────────────────────────────────
+def show_summary():
+    db       = load_db()
+    projects = db["projects"]
+
+    print()
+    print(colorize("  ◈  Experience Summary", BOLD + WHITE))
+    divider()
+
+    if not projects:
+        print(colorize("\n  No projects yet.\n", GRAY + DIM))
+        _footer()
+        return
+
+    skill_count = {}
+    ind_count  = {}
+    func_count = {}
+
+    for p in projects:
+        for t in p.get("skills", p.get("techs", [])):
+            skill_count[t] = skill_count.get(t, 0) + 1
+        ind_count[p["industry"]] = ind_count.get(p["industry"], 0) + 1
+        for f in p["functionals"]:
+            func_count[f] = func_count.get(f, 0) + 1
+
+    total     = len(projects)
+    clients   = len({p["client"] for p in projects})
+    employers = len({p["employer"] for p in projects})
+
+    print()
+    print(f"  {colorize(str(total), BOLD + WHITE)} projects  "
+          f"{colorize(str(clients), BOLD + CYAN)} clients  "
+          f"{colorize(str(employers), BOLD + MAGENTA)} employers")
+
+    def print_ranked(label, counts, color):
+        if not counts:
+            return
+        print()
+        print(colorize(f"  {label}", BOLD + WHITE))
+        max_count = max(counts.values())
+        col = max(32, max(len(n) for n in counts) + 2)
+        for name, cnt in sorted(counts.items(), key=lambda x: -x[1]):
+            bar = "█" * round((cnt / max_count) * 20)
+            print(f"    {colorize(f'{name:<{col}}', color)}  {colorize(bar, color + DIM)}  {colorize(str(cnt), GRAY)}")
+
+    print_ranked("Skills",     skill_count,  BLUE)
+    print_ranked("Industries",       ind_count,   YELLOW)
+    print_ranked("Functional Areas", func_count,  GREEN)
+
+    print()
+    _footer()
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main():
+    args = sys.argv[1:]
+
+    if not args:
+        show_main(); return
+
+    if args[0] == "full":
+        show_full(); return
+
+    if args[0] == "summary":
+        show_summary(); return
+
+    if args[0] == "add":
+        add_project(); return
+
+    if args[0] == "export":
+        export_projects(); return
+
+    if args[0] == "filter":
+        if len(args) < 2:
+            print(colorize("\n  ✗  Provide a search term: xp filter <term>\n", RED))
+            return
+        filter_projects(" ".join(args[1:]))
+        return
+
+
+    if args[0] == "skill":
+        list_taxonomy("skills"); return
+
+    if args[0] == "industry":
+        list_taxonomy("industries"); return
+
+    if args[0] == "functional":
+        if len(args) > 1 and args[1] == "add":
+            add_taxonomy("functionals")
+        else:
+            list_taxonomy("functionals")
+        return
+
+    # xp <id> <action>
+    if len(args) == 2:
+        try:
+            pid = int(args[0])
+        except ValueError:
+            print(colorize(f"\n  ✗  Unknown command: {' '.join(args)}\n", RED))
+            _usage(); return
+        cmd = args[1].lower()
+        if cmd in ("delete", "del", "rm", "remove"):
+            delete_project(pid)
+        elif cmd == "edit":
+            edit_project(pid)
+        elif cmd in ("detail", "show", "view"):
+            detail_project(pid)
+        else:
+            print(colorize(f"\n  ✗  Unknown action '{cmd}'. Use: detail | edit | delete\n", RED))
+        return
+
+    print(colorize(f"\n  ✗  Unknown command: {' '.join(args)}\n", RED))
+    _usage()
+
+def _usage():
+    print(colorize("  Usage:", BOLD + WHITE))
+    rows = [
+        ("xp",                      "List all projects"),
+        ("xp full",                 "All projects with full detail"),
+        ("xp add",                  "Add a project"),
+        ("xp filter <term>",        "Search across all fields"),
+        ("xp export",               "Export all projects to .md"),
+        ("xp summary",              "Stats overview"),
+        ("xp <id> detail",          "Full detail of a project"),
+        ("xp <id> edit",            "Edit a project"),
+        ("xp <id> delete",          "Delete a project"),
+        ("xp functional list",      "List functional areas"),
+    ]
+    for cmd, desc in rows:
+        print(colorize(f"    {cmd:<30}", CYAN) + colorize(desc, GRAY))
+    print()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,679 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import sys
+import re
+import calendar
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+# ── Data files ─────────────────────────────────────────────────────────────────
+CLD_FILE  = Path.home() / ".cld.json"
+TSK_FILE  = Path.home() / ".tsk.json"
+BDAY_FILE = Path.home() / ".bday.json"
+
+def load_events():
+    if CLD_FILE.exists():
+        with open(CLD_FILE) as f:
+            return json.load(f)
+    return []
+
+def save_events(events):
+    with open(CLD_FILE, "w") as f:
+        json.dump(events, f, indent=2)
+
+def next_id(events):
+    if not events:
+        return 1
+    return max(e["id"] for e in events) + 1
+
+def load_tasks():
+    if TSK_FILE.exists():
+        with open(TSK_FILE) as f:
+            return json.load(f)
+    return []
+
+def load_birthdays():
+    if BDAY_FILE.exists():
+        with open(BDAY_FILE) as f:
+            return json.load(f)
+    return []
+
+# ── ANSI colours ───────────────────────────────────────────────────────────────
+RESET   = "\033[0m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
+STRIKE  = "\033[9m"
+
+RED     = "\033[91m"
+YELLOW  = "\033[93m"
+GREEN   = "\033[92m"
+CYAN    = "\033[96m"
+BLUE    = "\033[94m"
+MAGENTA = "\033[95m"
+WHITE   = "\033[97m"
+GRAY    = "\033[90m"
+
+def colorize(text, *codes):
+    return "".join(codes) + text + RESET
+
+def term_width():
+    try:
+        return os.get_terminal_size().columns
+    except Exception:
+        return 80
+
+# ── Date parsing (shared with tsk) ────────────────────────────────────────────
+WEEKDAYS = {
+    "monday":0,"mon":0,"tuesday":1,"tue":1,"wednesday":2,"wed":2,
+    "thursday":3,"thu":3,"friday":4,"fri":4,"saturday":5,"sat":5,"sunday":6,"sun":6
+}
+
+def parse_date(raw: str):
+    """Returns ISO string, 'ambiguous:...' sentinel, or None."""
+    raw = raw.strip().lower()
+    today = date.today()
+
+    if raw == "today":
+        return today.isoformat()
+    if raw == "tomorrow":
+        return (today + timedelta(days=1)).isoformat()
+    if raw in ("next week", "nextweek"):
+        return (today + timedelta(weeks=1)).isoformat()
+    if raw in ("next month", "nextmonth"):
+        m = today.month + 1
+        y = today.year + (1 if m > 12 else 0)
+        m = m if m <= 12 else m - 12
+        return date(y, m, today.day).isoformat()
+    if raw in ("end of month", "eom"):
+        if today.month == 12:
+            eom = date(today.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            eom = date(today.year, today.month + 1, 1) - timedelta(days=1)
+        return eom.isoformat()
+
+    # Weekday names
+    next_prefix = False
+    check_raw = raw
+    if raw.startswith("next "):
+        next_prefix = True
+        check_raw = raw[5:]
+    if check_raw in WEEKDAYS:
+        target_wd = WEEKDAYS[check_raw]
+        today_wd  = today.weekday()
+        if next_prefix:
+            days_ahead = (target_wd - today_wd) % 7
+            days_ahead = days_ahead if days_ahead > 0 else 7
+            return (today + timedelta(days=days_ahead)).isoformat()
+        elif target_wd == today_wd:
+            this_iso = today.isoformat()
+            next_iso = (today + timedelta(days=7)).isoformat()
+            return f"ambiguous:{check_raw}:{this_iso}:{next_iso}"
+        else:
+            days_ahead = (target_wd - today_wd) % 7
+            return (today + timedelta(days=days_ahead)).isoformat()
+
+    # +Nd / +Nw
+    m = re.match(r'^\+(\d+)\s*(d|days?|w|weeks?)$', raw)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        delta = timedelta(weeks=n) if unit.startswith('w') else timedelta(days=n)
+        return (today + delta).isoformat()
+
+    # YYYY-MM-DD
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', raw)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError:
+            pass
+
+    # DD/MM/YYYY
+    m = re.match(r'^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$', raw)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        y = y + 2000 if y < 100 else y
+        for d_try in [(b, a), (a, b)]:
+            try:
+                return date(y, d_try[0], d_try[1]).isoformat()
+            except ValueError:
+                pass
+
+    # "Dec 23" / "23 Dec" / "December 23"
+    months = {
+        "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+        "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12,
+        "january":1,"february":2,"march":3,"april":4,"june":6,
+        "july":7,"august":8,"september":9,"october":10,"november":11,"december":12
+    }
+    m = re.match(r'^([a-z]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?$', raw)
+    if m and m.group(1) in months:
+        mo, dy = months[m.group(1)], int(m.group(2))
+        yr = int(m.group(3)) if m.group(3) else today.year
+        try:
+            d = date(yr, mo, dy)
+            if d < today and not m.group(3):
+                d = date(yr + 1, mo, dy)
+            return d.isoformat()
+        except ValueError:
+            pass
+    m = re.match(r'^(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?$', raw)
+    if m and m.group(2) in months:
+        mo, dy = months[m.group(2)], int(m.group(1))
+        yr = int(m.group(3)) if m.group(3) else today.year
+        try:
+            d = date(yr, mo, dy)
+            if d < today and not m.group(3):
+                d = date(yr + 1, mo, dy)
+            return d.isoformat()
+        except ValueError:
+            pass
+
+    return None
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+MONTH_NAMES = ["","January","February","March","April","May","June",
+               "July","August","September","October","November","December"]
+DAY_ABBR    = ["Mo","Tu","We","Th","Fr","Sa","Su"]
+
+def fmt_date(iso):
+    d = date.fromisoformat(iso)
+    return d.strftime("%b %-d, %Y")
+
+def days_until(iso):
+    return (date.fromisoformat(iso) - date.today()).days
+
+def prompt(label, required=True, hint=""):
+    full = colorize(label, CYAN + BOLD)
+    if hint:
+        full += colorize(f" ({hint})", GRAY)
+    full += colorize(" › ", GRAY)
+    while True:
+        try:
+            val = input(full).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if not val and not required:
+            return ""
+        if not val:
+            print(colorize("  ✗  This field is required.", RED))
+            continue
+        return val
+
+def prompt_date(label):
+    """Prompt for a date with weekday ambiguity handling. Returns ISO string or ''."""
+    hint = "today / tomorrow / monday / 2026-12-25 / leave blank"
+    while True:
+        raw = prompt(label, required=False, hint=hint)
+        if not raw:
+            return ""
+        result = parse_date(raw)
+        if result and result.startswith("ambiguous:"):
+            _, day_name, this_iso, next_iso = result.split(":")
+            day_cap = day_name.capitalize()
+            print(colorize(f"\n  Today is {day_cap}. Did you mean:", YELLOW))
+            print(colorize("    1  ", CYAN + BOLD) + colorize(f"Today  ({fmt_date(this_iso)})", WHITE))
+            print(colorize("    2  ", CYAN + BOLD) + colorize(f"Next {day_cap}  ({fmt_date(next_iso)})", WHITE))
+            print()
+            choice = prompt("Choice", hint="1 or 2")
+            if choice == "1":
+                result = this_iso
+            elif choice == "2":
+                result = next_iso
+            else:
+                print(colorize("  ✗  Please enter 1 or 2.", RED))
+                continue
+        elif result is None:
+            print(colorize(f'  ✗  Could not understand "{raw}". Try: tomorrow, monday, 2026-12-25', RED))
+            continue
+        d = days_until(result)
+        print(colorize(f"  ✓  {fmt_date(result)}", GREEN) +
+              colorize(f"  ({d} days)" if d > 0 else "  (today)" if d == 0 else f"  ({abs(d)}d ago)", GRAY))
+        return result
+
+# ── Gather all items for a given month ────────────────────────────────────────
+def gather_month(year: int, month: int):
+    """Returns dict: {day_int: [{"label", "icon", "color", "source"}]}"""
+    items = {}
+
+    def add(day, label, icon, color, source=""):
+        items.setdefault(day, []).append({"label": label, "icon": icon,
+                                           "color": color, "source": source})
+
+    # cld events
+    for e in load_events():
+        d = date.fromisoformat(e["date"])
+        if d.year == year and d.month == month:
+            add(d.day, e["title"], "◆", MAGENTA, "cld")
+        # multi-day
+        if e.get("end_date"):
+            ed = date.fromisoformat(e["end_date"])
+            cur = d + timedelta(days=1)
+            while cur <= ed and cur.month == month and cur.year == year:
+                add(cur.day, e["title"] + " (cont.)", "◆", MAGENTA + DIM, "cld")
+                cur += timedelta(days=1)
+
+    # tsk due dates
+    for t in load_tasks():
+        if t.get("done"):
+            continue
+        if not t.get("due"):
+            continue
+        d = date.fromisoformat(t["due"])
+        if d.year == year and d.month == month:
+            add(d.day, t["name"], "✦", CYAN, "tsk")
+
+    # bday
+    for b in load_birthdays():
+        try:
+            d = date(year, b["month"], b["day"])
+        except ValueError:
+            continue
+        if d.month == month:
+            add(d.day, f"{b['name']}'s birthday", "🎂", YELLOW, "bday")
+
+    return items
+
+# ── Calendar list renderer ────────────────────────────────────────────────────
+DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+
+def display_width(s):
+    """Terminal display width, counting wide chars (emoji) as 2."""
+    import unicodedata
+    w = 0
+    for c in s:
+        eaw = unicodedata.east_asian_width(c)
+        w += 2 if eaw in ('W', 'F') else 1
+    return w
+
+def render_month(year: int, month: int, show_header=True, show_footer=True):
+    today  = date.today()
+    width  = min(term_width(), 80)
+    items  = gather_month(year, month)
+    title  = f"{MONTH_NAMES[month].upper()}  {year}"
+    days_in_month = calendar.monthrange(year, month)[1]
+
+    # Fixed visible layout:
+    #   COL_DATE  = "  DD Www  "  → 10 chars
+    #   COL_BADGE = " ev"         →  3 chars
+    #   COL_SEP   = "  "          →  2 chars
+    #   COL_ICON  = icon + pad    →  3 display cols (icon=1 + 2sp, or emoji=2 + 1sp)
+    #   COL_LABEL = label
+    # Label starts at: 10 + 3 + 2 + 3 = 18
+    LABEL_START   = 18
+    BLANK_DATE    = " " * 10
+    BLANK_BADGE   = "   "   # 3 spaces
+
+    BADGES = {
+        "cld":  colorize(" ev", DIM + MAGENTA),
+        "tsk":  colorize(" tk", DIM + CYAN),
+        "bday": colorize(" bd", DIM + YELLOW),
+    }
+
+    if show_header:
+        print()
+
+    print(colorize(f"  {title}", BOLD + WHITE))
+    print(colorize("  " + "─" * (width - 4), GRAY))
+
+    has_any = False
+    for day in range(1, days_in_month + 1):
+        if day not in items:
+            continue
+        has_any = True
+        d          = date(year, month, day)
+        wd         = DAY_NAMES[d.weekday()]
+        is_today   = (d == today)
+        is_weekend = d.weekday() >= 5
+
+        date_text = f"  {day:02d} {wd}  "   # exactly 10 visible chars
+        if is_today:
+            date_col = colorize(date_text, BOLD + WHITE + "\033[44m")
+        elif is_weekend:
+            date_col = colorize(date_text, GRAY)
+        else:
+            date_col = colorize(date_text, DIM + WHITE)
+
+        for i, item in enumerate(items[day]):
+            icon  = item["icon"]
+            col   = item["color"]
+            label = item["label"]
+            src   = item.get("source", "")
+
+            # Icon column: always 3 display cols wide
+            icon_dw  = display_width(icon)
+            icon_pad = " " * (3 - icon_dw)
+            icon_col = colorize(icon, col) + icon_pad
+
+            badge = BADGES.get(src, BLANK_BADGE)
+
+            if i == 0:
+                print(f"{date_col}{badge}  {icon_col}{colorize(label, col)}")
+            else:
+                print(f"{BLANK_DATE}{badge}  {icon_col}{colorize(label, col)}")
+
+    if not has_any:
+        print(colorize("  —  no events", GRAY + DIM))
+
+    if show_footer:
+        print()
+
+def render_months(months: list):
+    """Render a list of (year, month) tuples as grouped list view."""
+    today = date.today()
+    width = min(term_width(), 80)
+
+    print()
+    for i, (y, m) in enumerate(months):
+        render_month(y, m, show_header=False, show_footer=(i < len(months) - 1))
+
+    print()
+    print(
+        colorize("  ◆ ev=event", MAGENTA) + colorize("  ·  ", GRAY) +
+        colorize("✦ tk=task", CYAN)       + colorize("  ·  ", GRAY) +
+        colorize("🎂 bd=birthday", YELLOW) + colorize("  ·  ", GRAY) +
+        colorize("cld add", CYAN + BOLD)  + colorize("  ·  ", GRAY) +
+        colorize("cld next / cld prev", CYAN + BOLD)
+    )
+    print()
+
+# ── Agenda view ───────────────────────────────────────────────────────────────
+def render_agenda(days_ahead=60):
+    today = date.today()
+    width = min(term_width(), 80)
+
+    # Build sorted list of (date, label, icon, color, source)
+    entries = []
+
+    for e in load_events():
+        d = date.fromisoformat(e["date"])
+        if d >= today and (d - today).days <= days_ahead:
+            entries.append((d, e["title"], "◆", MAGENTA, "cld",
+                            e.get("note", ""), e.get("id")))
+
+    for t in load_tasks():
+        if t.get("done") or not t.get("due"):
+            continue
+        d = date.fromisoformat(t["due"])
+        if d >= today and (d - today).days <= days_ahead:
+            entries.append((d, t["name"], "✦", CYAN, "tsk",
+                            t.get("note", ""), t.get("id")))
+
+    for b in load_birthdays():
+        try:
+            d = date(today.year, b["month"], b["day"])
+            if d < today:
+                d = date(today.year + 1, b["month"], b["day"])
+        except ValueError:
+            continue
+        if (d - today).days <= days_ahead:
+            entries.append((d, f"{b['name']}'s birthday", "🎂", YELLOW, "bday",
+                            b.get("observation", ""), None))
+
+    entries.sort(key=lambda x: x[0])
+
+    print()
+    print(colorize("  ◈  Agenda", BOLD + WHITE) +
+          colorize(f"  ·  next {days_ahead} days", GRAY))
+    print(colorize("  " + "─" * (width - 4), GRAY))
+
+    if not entries:
+        print()
+        print(colorize("  Nothing coming up.", GRAY))
+    else:
+        last_date = None
+        for (d, label, icon, color, source, note, eid) in entries:
+            delta = (d - today).days
+            if d != last_date:
+                print()
+                if delta == 0:
+                    date_hdr = colorize("  TODAY", BOLD + RED)
+                elif delta == 1:
+                    date_hdr = colorize("  TOMORROW", BOLD + YELLOW)
+                else:
+                    date_hdr = colorize(f"  {d.strftime('%A, %B %-d')}", BOLD + WHITE)
+                    date_hdr += colorize(f"  ·  {delta}d", GRAY)
+                print(date_hdr)
+                last_date = d
+
+            src_badge = {
+                "cld":  colorize(" event ", DIM + MAGENTA),
+                "tsk":  colorize(" task  ", DIM + CYAN),
+                "bday": colorize(" bday  ", DIM + YELLOW),
+            }.get(source, "")
+
+            id_str = colorize(f"#{eid}", GRAY + DIM) if eid else "    "
+            line = f"    {src_badge}  {colorize(icon + '  ' + label, color)}"
+            if note:
+                line += colorize(f"  ·  {note}", GRAY + DIM)
+            print(line)
+
+    print()
+    print(colorize("  " + "─" * (width - 4), GRAY))
+    print()
+
+# ── List cld events ───────────────────────────────────────────────────────────
+def list_events():
+    events = load_events()
+    today  = date.today()
+    width  = min(term_width(), 80)
+
+    if not events:
+        print(colorize("\n  No events. Run ", GRAY) +
+              colorize("cld add", CYAN + BOLD) +
+              colorize(" to add one.\n", GRAY))
+        return
+
+    events_sorted = sorted(events, key=lambda e: e["date"])
+    upcoming = [e for e in events_sorted if date.fromisoformat(e["date"]) >= today]
+    past     = [e for e in events_sorted if date.fromisoformat(e["date"]) < today]
+
+    print()
+    print(colorize("  ◆  Events", BOLD + WHITE))
+    print(colorize("  " + "─" * (width - 4), GRAY))
+
+    for e in upcoming:
+        _print_event_row(e)
+
+    if past:
+        print()
+        print(colorize("  ── Past ──────────────────────────────────────", GRAY))
+        for e in past:
+            _print_event_row(e, dim=True)
+
+    print()
+    print(colorize("  " + "─" * (width - 4), GRAY))
+    print(colorize(f"  {len(upcoming)} upcoming  ·  {len(past)} past", GRAY))
+    print()
+
+def _print_event_row(e, dim=False):
+    delta = days_until(e["date"])
+    d_str = fmt_date(e["date"])
+    title = e["title"]
+    note  = e.get("note", "")
+    eid   = e["id"]
+
+    if delta < 0:
+        badge = colorize(f" {abs(delta)}d ago ", DIM + GRAY)
+        col   = GRAY
+    elif delta == 0:
+        badge = colorize(" TODAY ", BOLD + WHITE + "\033[41m")
+        col   = BOLD + RED
+    elif delta == 1:
+        badge = colorize(" TOMORROW ", BOLD + "\033[30m\033[43m")
+        col   = BOLD + YELLOW
+    elif delta <= 7:
+        badge = colorize(" THIS WEEK ", "\033[38;5;0;42m")
+        col   = BOLD + GREEN
+    elif delta <= 30:
+        badge = colorize(f" {delta}d ", DIM + CYAN)
+        col   = WHITE
+    else:
+        badge = colorize(f" {delta}d ", DIM + GRAY)
+        col   = GRAY if dim else WHITE
+
+    id_str = colorize(f"#{eid:<3}", GRAY + DIM)
+    print()
+    print(f"  {id_str}  {badge}  {colorize(title, col)}")
+    detail = f"         {colorize(d_str, CYAN if not dim else GRAY)}"
+    if e.get("end_date"):
+        detail += colorize(f" → {fmt_date(e['end_date'])}", CYAN if not dim else GRAY)
+    if note:
+        detail += colorize(f"  ·  {note}", GRAY + DIM)
+    print(detail)
+
+# ── Add event ─────────────────────────────────────────────────────────────────
+def add_event():
+    print()
+    print(colorize("  ◆  Add an Event", BOLD + WHITE))
+    print(colorize("  Press Ctrl+C to cancel.\n", GRAY))
+
+    title    = prompt("Title")
+    date_iso = prompt_date("Date")
+    if not date_iso:
+        print(colorize("  ✗  Date is required.", RED))
+        return
+
+    end_raw = prompt("End date", required=False,
+                     hint="optional, for multi-day events")
+    end_iso = ""
+    if end_raw:
+        end_iso = parse_date(end_raw)
+        if not end_iso or end_iso.startswith("ambiguous"):
+            print(colorize("  ✗  Could not parse end date, skipping.", YELLOW))
+            end_iso = ""
+        elif end_iso < date_iso:
+            print(colorize("  ✗  End date is before start date, skipping.", YELLOW))
+            end_iso = ""
+
+    note = prompt("Note", required=False, hint="optional")
+
+    events = load_events()
+    entry = {
+        "id":         next_id(events),
+        "title":      title,
+        "date":       date_iso,
+        "note":       note,
+        "created_on": date.today().isoformat(),
+    }
+    if end_iso:
+        entry["end_date"] = end_iso
+
+    events.append(entry)
+    save_events(events)
+
+    print()
+    span = f" → {fmt_date(end_iso)}" if end_iso else ""
+    print(colorize(f"  ✓  #{entry['id']} {title}", GREEN + BOLD) +
+          colorize(f"  ·  {fmt_date(date_iso)}{span}", CYAN))
+    print()
+
+# ── Delete event ──────────────────────────────────────────────────────────────
+def delete_event(eid: int):
+    events = load_events()
+    match  = next((e for e in events if e["id"] == eid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No event with id #{eid}.\n", RED))
+        return
+    print()
+    confirm = input(
+        colorize(f"  Delete ", GRAY) +
+        colorize(f"#{eid} {match['title']}", BOLD + WHITE) +
+        colorize("? y/N › ", GRAY)
+    ).strip().lower()
+    if confirm in ("y", "yes"):
+        save_events([e for e in events if e["id"] != eid])
+        print(colorize(f"  ✓  #{eid} deleted.\n", GREEN))
+    else:
+        print(colorize("  Cancelled.\n", GRAY))
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main():
+    args  = sys.argv[1:]
+    today = date.today()
+
+    # cld  →  this month + next 2 months as list
+    if not args:
+        months = []
+        y, m = today.year, today.month
+        for _ in range(3):
+            months.append((y, m))
+            m += 1
+            if m > 12:
+                m, y = 1, y + 1
+        render_months(months)
+        return
+
+    # cld agenda
+    if args[0] == "agenda":
+        days = int(args[1]) if len(args) > 1 and args[1].isdigit() else 60
+        render_agenda(days)
+        return
+
+    # cld add
+    if args[0] == "add":
+        add_event()
+        return
+
+    # cld list
+    if args[0] == "list":
+        list_events()
+        return
+
+    # cld next  /  cld prev  /  cld YYYY-MM
+    if args[0] == "next":
+        m = today.month + 1
+        y = today.year + (1 if m > 12 else 0)
+        m = m if m <= 12 else m - 12
+        render_months([(y, m)])
+        return
+
+    if args[0] == "prev":
+        m = today.month - 1
+        y = today.year - (1 if m < 1 else 0)
+        m = m if m >= 1 else m + 12
+        render_months([(y, m)])
+        return
+
+    # cld 2026-08  or  cld 2026 8
+    if re.match(r'^\d{4}-\d{1,2}$', args[0]):
+        y, m = map(int, args[0].split("-"))
+        render_months([(y, m)])
+        return
+
+    if len(args) == 2 and args[0].isdigit() and args[1].isdigit():
+        render_months([(int(args[0]), int(args[1]))])
+        return
+
+    # cld <id> delete
+    if len(args) == 2 and args[1].lower() in ("delete", "del", "rm", "remove"):
+        try:
+            delete_event(int(args[0]))
+        except ValueError:
+            print(colorize(f"\n  ✗  Invalid id '{args[0]}'.\n", RED))
+        return
+
+    print(colorize(f"\n  ✗  Unknown command: {' '.join(args)}\n", RED))
+    _usage()
+
+def _usage():
+    print(colorize("  Usage:", BOLD + WHITE))
+    rows = [
+        ("cld",              "Current month calendar"),
+        ("cld next",         "Next month"),
+        ("cld prev",         "Previous month"),
+        ("cld 2026-08",      "Specific month"),
+        ("cld agenda",       "Agenda for next 60 days"),
+        ("cld agenda 30",    "Agenda for next N days"),
+        ("cld add",          "Add a new event"),
+        ("cld list",         "List all events"),
+        ("cld <id> delete",  "Delete an event"),
+    ]
+    for cmd, desc in rows:
+        print(colorize(f"    {cmd:<22}", CYAN) + colorize(desc, GRAY))
+    print()
+
+if __name__ == "__main__":
+    main()

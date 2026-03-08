@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import sys
+import argparse
+from datetime import date, datetime
+from pathlib import Path
+
+# ── Data storage ──────────────────────────────────────────────────────────────
+DATA_FILE = Path.home() / ".bday.json"
+
+def load_birthdays():
+    if DATA_FILE.exists():
+        with open(DATA_FILE) as f:
+            return json.load(f)
+    return []
+
+def save_birthdays(bdays):
+    with open(DATA_FILE, "w") as f:
+        json.dump(bdays, f, indent=2)
+
+# ── Date helpers ───────────────────────────────────────────────────────────────
+def days_until_next_birthday(month: int, day: int) -> int:
+    today = date.today()
+    next_bday = date(today.year, month, day)
+    if next_bday < today:
+        next_bday = date(today.year + 1, month, day)
+    return (next_bday - today).days
+
+def age_on_next_birthday(birth_year: int | None, month: int, day: int) -> int | None:
+    if birth_year is None:
+        return None
+    today = date.today()
+    next_year = today.year if date(today.year, month, day) >= today else today.year + 1
+    return next_year - birth_year
+
+MONTH_NAMES = [
+    "", "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+]
+
+# ── ANSI colours ───────────────────────────────────────────────────────────────
+RESET  = "\033[0m"
+BOLD   = "\033[1m"
+DIM    = "\033[2m"
+
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+GREEN  = "\033[92m"
+CYAN   = "\033[96m"
+BLUE   = "\033[94m"
+MAGENTA= "\033[95m"
+WHITE  = "\033[97m"
+GRAY   = "\033[90m"
+
+def colorize(text, *codes):
+    return "".join(codes) + text + RESET
+
+def term_width():
+    try:
+        return os.get_terminal_size().columns
+    except Exception:
+        return 72
+
+# ── Display ────────────────────────────────────────────────────────────────────
+def show_upcoming(bdays):
+    today = date.today()
+    width = min(term_width(), 80)
+
+    if not bdays:
+        print(colorize("  No birthdays saved yet. Run ", GRAY) +
+              colorize("bday add", CYAN + BOLD) +
+              colorize(" to add one.", GRAY))
+        return
+
+    # Enrich & sort
+    enriched = []
+    for b in bdays:
+        days = days_until_next_birthday(b["month"], b["day"])
+        enriched.append({**b, "days": days})
+    enriched.sort(key=lambda x: x["days"])
+
+    # Header
+    date_str = today.strftime("%A, %B %-d %Y")
+    print()
+    print(colorize(f"  🎂  Birthday Reminders", BOLD + WHITE) +
+          colorize(f"  ·  {date_str}", GRAY))
+    print(colorize("  " + "─" * (width - 4), GRAY))
+
+    shown = 0
+    for b in enriched:
+        days  = b["days"]
+        name  = b["name"]
+        month = b["month"]
+        day   = b["day"]
+        obs   = b.get("observation", "")
+        year  = b.get("year")
+
+        # Only show upcoming window: today + 30 days
+        if days > 30:
+            break
+
+        shown += 1
+        date_label = f"{MONTH_NAMES[month]} {day}"
+
+        # Age
+        age = age_on_next_birthday(year, month, day)
+        age_str = colorize(f" (turns {age})", DIM + CYAN) if age else ""
+
+        # Status badge
+        if days == 0:
+            badge     = colorize(" TODAY ", BOLD + WHITE + "\033[41m")   # red bg
+            name_col  = BOLD + RED
+            days_str  = ""
+        elif days == 1:
+            badge     = colorize(" TOMORROW ", BOLD + "\033[30m" + "\033[43m")  # yellow bg
+            name_col  = BOLD + YELLOW
+            days_str  = colorize("  1 day", YELLOW)
+        elif days <= 7:
+            badge     = colorize(" THIS WEEK ", "\033[38;5;0;42m")  # green bg, true black text, no bold
+            name_col  = BOLD + GREEN
+            days_str  = colorize(f"  {days} days", GREEN)
+        else:
+            badge     = colorize(f" {days} days ", DIM + GRAY)
+            name_col  = WHITE
+            days_str  = colorize(f"  {days} days", GRAY)
+
+        print()
+        line1 = f"  {badge}  {colorize(name, name_col)}{age_str}"
+        print(line1)
+
+        detail = f"       {colorize(date_label, CYAN)}{days_str}"
+        if obs:
+            detail += colorize(f"  ·  {obs}", GRAY + DIM)
+        print(detail)
+
+    if shown == 0:
+        print()
+        print(colorize("  No birthdays in the next 30 days.", GRAY))
+
+    # Show how many more are outside the window
+    remaining = len(enriched) - shown
+    if remaining > 0:
+        # Find next one after window
+        nxt = next((b for b in enriched if b["days"] > 30), None)
+        print()
+        if nxt:
+            nxt_date = f"{MONTH_NAMES[nxt['month']]} {nxt['day']}"
+            print(colorize(f"  … and {remaining} more  ·  next: {nxt['name']} on {nxt_date} ({nxt['days']} days)", GRAY))
+        else:
+            print(colorize(f"  … {remaining} more birthdays on record.", GRAY))
+
+    print(colorize("  " + "─" * (width - 4), GRAY))
+    total = len(bdays)
+    print(colorize(f"  {total} birthday{'s' if total != 1 else ''} total  ·  ", GRAY) +
+          colorize("bday add", CYAN) +
+          colorize(" · ", GRAY) +
+          colorize("bday list", CYAN) +
+          colorize(" · ", GRAY) +
+          colorize("bday remove", CYAN))
+    print()
+
+def show_all(bdays):
+    width = min(term_width(), 80)
+    if not bdays:
+        print(colorize("  No birthdays saved yet.", GRAY))
+        return
+
+    enriched = []
+    for b in bdays:
+        days = days_until_next_birthday(b["month"], b["day"])
+        enriched.append({**b, "days": days})
+    enriched.sort(key=lambda x: (x["month"], x["day"]))
+
+    print()
+    print(colorize("  🎂  All Birthdays", BOLD + WHITE))
+    print(colorize("  " + "─" * (width - 4), GRAY))
+
+    for b in enriched:
+        days  = b["days"]
+        name  = b["name"]
+        obs   = b.get("observation", "")
+        year  = b.get("year")
+        date_label = f"{MONTH_NAMES[b['month']]:>9} {b['day']:2}"
+
+        age = age_on_next_birthday(year, b["month"], b["day"])
+        age_str = colorize(f" ({age})", DIM) if age else ""
+
+        if days == 0:
+            days_col = colorize("TODAY    ", RED + BOLD)
+        elif days <= 7:
+            days_col = colorize(f"in {days:2}d   ", GREEN + BOLD)
+        elif days <= 30:
+            days_col = colorize(f"in {days:2}d   ", YELLOW)
+        else:
+            days_col = colorize(f"in {days:3}d  ", GRAY)
+
+        row = f"  {colorize(date_label, CYAN)}  {days_col}  {colorize(name, WHITE + BOLD)}{age_str}"
+        if obs:
+            row += colorize(f"  — {obs}", GRAY + DIM)
+        print(row)
+
+    print(colorize("  " + "─" * (width - 4), GRAY))
+    print(colorize(f"  {len(bdays)} total", GRAY))
+    print()
+
+# ── Add ────────────────────────────────────────────────────────────────────────
+def prompt(label, required=True, validator=None, hint=""):
+    full_label = colorize(label, CYAN + BOLD)
+    if hint:
+        full_label += colorize(f" ({hint})", GRAY)
+    full_label += colorize(" › ", GRAY)
+    while True:
+        try:
+            val = input(full_label).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if not val and not required:
+            return ""
+        if not val:
+            print(colorize("  ✗  This field is required.", RED))
+            continue
+        if validator:
+            result = validator(val)
+            if result is not True:
+                print(colorize(f"  ✗  {result}", RED))
+                continue
+        return val
+
+def validate_month(val):
+    try:
+        m = int(val)
+        if 1 <= m <= 12:
+            return True
+        return "Enter a number between 1 and 12."
+    except ValueError:
+        # Try name
+        for i, name in enumerate(MONTH_NAMES):
+            if name.lower().startswith(val.lower()) and i > 0:
+                return True
+        return "Enter a month number (1-12) or name."
+
+def parse_month(val):
+    try:
+        return int(val)
+    except ValueError:
+        for i, name in enumerate(MONTH_NAMES):
+            if name.lower().startswith(val.lower()) and i > 0:
+                return i
+
+def validate_day(month):
+    def inner(val):
+        try:
+            d = int(val)
+            max_day = [0,31,29,31,30,31,30,31,31,30,31,30,31][month]
+            if 1 <= d <= max_day:
+                return True
+            return f"Enter a day between 1 and {max_day}."
+        except ValueError:
+            return "Enter a valid day number."
+    return inner
+
+def validate_year(val):
+    if not val:
+        return True
+    try:
+        y = int(val)
+        current = date.today().year
+        if 1900 <= y <= current:
+            return True
+        return f"Enter a year between 1900 and {current}."
+    except ValueError:
+        return "Enter a valid 4-digit year."
+
+def add_birthday():
+    print()
+    print(colorize("  ✦  Add a Birthday", BOLD + WHITE))
+    print(colorize("  Press Ctrl+C to cancel.\n", GRAY))
+
+    name  = prompt("Name")
+    month_raw = prompt("Month", hint="1-12 or name")
+    month = parse_month(month_raw)
+    day   = int(prompt("Day", validator=validate_day(month)))
+    year_raw = prompt("Birth year", required=False, hint="optional, for age")
+    year  = int(year_raw) if year_raw else None
+    obs   = prompt("Note", required=False, hint="optional")
+
+    bdays = load_birthdays()
+
+    # Check duplicate
+    for b in bdays:
+        if b["name"].lower() == name.lower() and b["month"] == month and b["day"] == day:
+            print(colorize(f"\n  ✗  {name} on {MONTH_NAMES[month]} {day} already exists.", YELLOW))
+            sys.exit(1)
+
+    entry = {"name": name, "month": month, "day": day}
+    if year:
+        entry["year"] = year
+    if obs:
+        entry["observation"] = obs
+
+    bdays.append(entry)
+    save_birthdays(bdays)
+
+    days = days_until_next_birthday(month, day)
+    print()
+    print(colorize(f"  ✓  {name}", GREEN + BOLD) +
+          colorize(f"  ·  {MONTH_NAMES[month]} {day}", CYAN) +
+          colorize(f"  ·  {days} days away", GRAY))
+    print()
+
+# ── Remove ─────────────────────────────────────────────────────────────────────
+def remove_birthday(query):
+    bdays = load_birthdays()
+    if not bdays:
+        print(colorize("  No birthdays saved.", GRAY))
+        return
+
+    matches = [b for b in bdays if query.lower() in b["name"].lower()]
+    if not matches:
+        print(colorize(f'  No birthday found matching "{query}".', YELLOW))
+        return
+
+    if len(matches) > 1:
+        print(colorize(f'\n  Multiple matches for "{query}":\n', YELLOW))
+        for i, b in enumerate(matches, 1):
+            print(colorize(f"  {i}. ", GRAY) +
+                  colorize(b["name"], WHITE + BOLD) +
+                  colorize(f"  {MONTH_NAMES[b['month']]} {b['day']}", CYAN))
+        print()
+        choice_raw = prompt("Which one to remove? (number)")
+        try:
+            idx = int(choice_raw) - 1
+            if not (0 <= idx < len(matches)):
+                raise ValueError
+            target = matches[idx]
+        except ValueError:
+            print(colorize("  Invalid choice.", RED))
+            return
+    else:
+        target = matches[0]
+
+    confirm = prompt(
+        colorize(f"Remove {target['name']} ({MONTH_NAMES[target['month']]} {target['day']})?", YELLOW + BOLD) +
+        colorize(" y/N", GRAY),
+        required=False
+    )
+    if confirm.lower() in ("y", "yes"):
+        bdays = [b for b in bdays if b is not target]
+        save_birthdays(bdays)
+        print(colorize(f"  ✓  Removed {target['name']}.", GREEN))
+    else:
+        print(colorize("  Cancelled.", GRAY))
+    print()
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main():
+    parser = argparse.ArgumentParser(
+        prog="bday",
+        description="Birthday manager",
+        add_help=True
+    )
+    sub = parser.add_subparsers(dest="cmd")
+
+    sub.add_parser("add",    help="Add a birthday")
+    sub.add_parser("list",   help="List all birthdays")
+    sub.add_parser("all",    help="List all birthdays")
+    rm = sub.add_parser("remove", help="Remove a birthday")
+    rm.add_argument("name", nargs="?", default="", help="Name to remove")
+
+    args = parser.parse_args()
+
+    if args.cmd == "add":
+        add_birthday()
+    elif args.cmd in ("list", "all"):
+        show_all(load_birthdays())
+    elif args.cmd == "remove":
+        query = args.name or prompt("Name to remove")
+        remove_birthday(query)
+    else:
+        show_upcoming(load_birthdays())
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,494 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import sys
+import re
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+# ── Data storage ───────────────────────────────────────────────────────────────
+DATA_FILE  = Path.home() / ".tsk.json"
+
+def load_tasks():
+    if DATA_FILE.exists():
+        with open(DATA_FILE) as f:
+            return json.load(f)
+    return []
+
+def save_tasks(tasks):
+    with open(DATA_FILE, "w") as f:
+        json.dump(tasks, f, indent=2)
+
+def next_id(tasks):
+    if not tasks:
+        return 1
+    return max(t["id"] for t in tasks) + 1
+
+# ── ANSI colours (shared palette with bday) ────────────────────────────────────
+RESET   = "\033[0m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
+STRIKE  = "\033[9m"
+
+RED     = "\033[91m"
+YELLOW  = "\033[93m"
+GREEN   = "\033[92m"
+CYAN    = "\033[96m"
+BLUE    = "\033[94m"
+MAGENTA = "\033[95m"
+WHITE   = "\033[97m"
+GRAY    = "\033[90m"
+
+def colorize(text, *codes):
+    return "".join(codes) + text + RESET
+
+def term_width():
+    try:
+        return os.get_terminal_size().columns
+    except Exception:
+        return 72
+
+# ── Date parsing ───────────────────────────────────────────────────────────────
+def parse_due(raw: str) -> str | None:
+    """Parse a human date string into ISO format YYYY-MM-DD. Returns None if unparseable.
+    Returns the string 'ambiguous:<weekday_name>:<this_iso>:<next_iso>' when the typed
+    weekday matches today and clarification is needed."""
+    raw = raw.strip().lower()
+    today = date.today()
+
+    if raw in ("today",):
+        return today.isoformat()
+    if raw in ("tomorrow",):
+        return (today + timedelta(days=1)).isoformat()
+    if raw in ("next week", "nextweek"):
+        return (today + timedelta(weeks=1)).isoformat()
+    if raw in ("next month", "nextmonth"):
+        m = today.month + 1
+        y = today.year + (1 if m > 12 else 0)
+        m = m if m <= 12 else m - 12
+        return date(y, m, today.day).isoformat()
+    if raw in ("next year", "nextyear"):
+        return date(today.year + 1, today.month, today.day).isoformat()
+    if raw in ("this week", "end of week", "eow"):
+        days_ahead = 6 - today.weekday()
+        return (today + timedelta(days=days_ahead)).isoformat()
+    if raw in ("end of month", "eom"):
+        if today.month == 12:
+            eom = date(today.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            eom = date(today.year, today.month + 1, 1) - timedelta(days=1)
+        return eom.isoformat()
+
+    # Day-of-week names: "monday", "tuesday", etc. (full or 3-letter abbrev)
+    WEEKDAYS = {
+        "monday":0,"mon":0,"tuesday":1,"tue":1,"wednesday":2,"wed":2,
+        "thursday":3,"thu":3,"friday":4,"fri":4,"saturday":5,"sat":5,"sunday":6,"sun":6
+    }
+    # Also handle "next monday" etc.
+    next_prefix = False
+    check_raw = raw
+    if raw.startswith("next "):
+        next_prefix = True
+        check_raw = raw[5:]
+    if check_raw in WEEKDAYS:
+        target_wd = WEEKDAYS[check_raw]
+        today_wd  = today.weekday()
+        if next_prefix:
+            # "next monday" → always the monday of next week onwards
+            days_ahead = (target_wd - today_wd) % 7
+            days_ahead = days_ahead if days_ahead > 0 else 7
+            return (today + timedelta(days=days_ahead)).isoformat()
+        elif target_wd == today_wd:
+            # Same weekday — need clarification
+            this_iso = today.isoformat()
+            next_iso = (today + timedelta(days=7)).isoformat()
+            return f"ambiguous:{check_raw}:{this_iso}:{next_iso}"
+        else:
+            days_ahead = (target_wd - today_wd) % 7
+            return (today + timedelta(days=days_ahead)).isoformat()
+
+    # "+Nd" / "+N days" / "+Nw" / "+N weeks"
+    m = re.match(r'^\+(\d+)\s*(d|days?|w|weeks?)$', raw)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        delta = timedelta(weeks=n) if unit.startswith('w') else timedelta(days=n)
+        return (today + delta).isoformat()
+
+    # YYYY-MM-DD
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})$', raw)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError:
+            pass
+
+    # DD/MM/YYYY or MM/DD/YYYY — try both, prefer future date
+    m = re.match(r'^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$', raw)
+    if m:
+        a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        y = y + 2000 if y < 100 else y
+        for d_try in [(b, a), (a, b)]:   # try MM/DD then DD/MM
+            try:
+                parsed = date(y, d_try[0], d_try[1])
+                return parsed.isoformat()
+            except ValueError:
+                pass
+
+    # "Dec 23" / "23 Dec" / "December 23"
+    months = {
+        "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+        "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12,
+        "january":1,"february":2,"march":3,"april":4,"june":6,
+        "july":7,"august":8,"september":9,"october":10,"november":11,"december":12
+    }
+    m = re.match(r'^([a-z]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?$', raw)
+    if m and m.group(1) in months:
+        mo = months[m.group(1)]
+        dy = int(m.group(2))
+        yr = int(m.group(3)) if m.group(3) else today.year
+        try:
+            d = date(yr, mo, dy)
+            if d < today and not m.group(3):
+                d = date(yr + 1, mo, dy)
+            return d.isoformat()
+        except ValueError:
+            pass
+    m = re.match(r'^(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?$', raw)
+    if m and m.group(2) in months:
+        mo = months[m.group(2)]
+        dy = int(m.group(1))
+        yr = int(m.group(3)) if m.group(3) else today.year
+        try:
+            d = date(yr, mo, dy)
+            if d < today and not m.group(3):
+                d = date(yr + 1, mo, dy)
+            return d.isoformat()
+        except ValueError:
+            pass
+
+    return None
+
+def days_until(iso: str) -> int:
+    return (date.fromisoformat(iso) - date.today()).days
+
+def fmt_date(iso: str) -> str:
+    d = date.fromisoformat(iso)
+    return d.strftime("%b %-d, %Y")
+
+# ── Urgency scoring (lower = more urgent) ─────────────────────────────────────
+def urgency_score(task) -> tuple:
+    """Returns (done, overdue_inv, days) for sorting: done tasks last."""
+    done = 1 if task.get("done") else 0
+    if not task.get("due"):
+        return (done, 0, 9999)
+    d = days_until(task["due"])
+    return (done, 0, d)
+
+# ── Badge helper ───────────────────────────────────────────────────────────────
+def due_badge(task):
+    if task.get("done"):
+        return colorize(" DONE ", BOLD + "\033[38;5;0;42m"), GRAY, ""
+
+    if not task.get("due"):
+        return colorize(" NO DATE ", DIM + GRAY), WHITE, colorize("  no due date", GRAY)
+
+    d = days_until(task["due"])
+    label = fmt_date(task["due"])
+
+    if d < 0:
+        badge    = colorize(" OVERDUE ", BOLD + WHITE + "\033[41m")
+        name_col = BOLD + RED
+        days_str = colorize(f"  {abs(d)}d overdue", RED)
+    elif d == 0:
+        badge    = colorize(" TODAY ", BOLD + WHITE + "\033[41m")
+        name_col = BOLD + RED
+        days_str = ""
+    elif d == 1:
+        badge    = colorize(" TOMORROW ", BOLD + "\033[30m" + "\033[43m")
+        name_col = BOLD + YELLOW
+        days_str = colorize("  1 day", YELLOW)
+    elif d <= 7:
+        badge    = colorize(" THIS WEEK ", "\033[38;5;0;42m")
+        name_col = BOLD + GREEN
+        days_str = colorize(f"  {d} days", GREEN)
+    elif d <= 30:
+        badge    = colorize(f" {d} days ", DIM + CYAN)
+        name_col = WHITE
+        days_str = colorize(f"  {d} days", CYAN)
+    else:
+        badge    = colorize(f" {d}d ", DIM + GRAY)
+        name_col = WHITE
+        days_str = colorize(f"  {d} days", GRAY)
+
+    return badge, name_col, days_str
+
+# ── Display ────────────────────────────────────────────────────────────────────
+def show_tasks(include_done=False):
+    tasks = load_tasks()
+    today = date.today()
+    width = min(term_width(), 80)
+
+    active = [t for t in tasks if not t.get("done")]
+    done   = [t for t in tasks if t.get("done")]
+
+    active.sort(key=urgency_score)
+
+    print()
+    date_str = today.strftime("%A, %B %-d %Y")
+    print(colorize("  ✦  Tasks", BOLD + WHITE) +
+          colorize(f"  ·  {date_str}", GRAY))
+    print(colorize("  " + "─" * (width - 4), GRAY))
+
+    if not active and not (include_done and done):
+        print()
+        print(colorize("  No tasks. Run ", GRAY) +
+              colorize("tsk add", CYAN + BOLD) +
+              colorize(" to add one.", GRAY))
+    else:
+        for t in active:
+            _print_task_row(t)
+
+        if include_done and done:
+            print()
+            print(colorize("  ── Completed ──────────────────────────────────", GRAY))
+            for t in sorted(done, key=lambda x: x.get("completed_on", "")):
+                _print_task_row(t, force_done=True)
+
+    print()
+    print(colorize("  " + "─" * (width - 4), GRAY))
+    total_active = len(active)
+    total_done   = len(done)
+    print(colorize(f"  {total_active} active", GRAY) +
+          colorize(f"  ·  {total_done} done", GRAY) +
+          colorize("  ·  ", GRAY) +
+          colorize("tsk add", CYAN) +
+          colorize(" · ", GRAY) +
+          colorize("tsk list", CYAN) +
+          colorize(" · ", GRAY) +
+          colorize("tsk <id> done", CYAN) +
+          colorize(" · ", GRAY) +
+          colorize("tsk <id> delete", CYAN))
+    print()
+
+def _print_task_row(t, force_done=False):
+    tid      = t["id"]
+    name     = t["name"]
+    note     = t.get("note", "")
+    source   = t.get("source", "")
+    is_done  = t.get("done") or force_done
+
+    badge, name_col, days_str = due_badge(t)
+
+    id_str = colorize(f"#{tid:<3}", GRAY + DIM)
+
+    if is_done:
+        name_rendered = colorize(STRIKE + name + RESET + GRAY, GRAY)
+        days_str = ""
+        if t.get("completed_on"):
+            days_str = colorize(f"  ✓ {t['completed_on']}", GRAY + DIM)
+    else:
+        name_rendered = colorize(name, name_col)
+
+    src_str = colorize("  🎂", GRAY + DIM) if source else ""
+
+    print()
+    print(f"  {id_str}  {badge}  {name_rendered}{src_str}")
+
+    detail = f"         "
+    if t.get("due"):
+        detail += colorize(fmt_date(t["due"]), CYAN if not is_done else GRAY)
+    else:
+        detail += colorize("no due date", GRAY + DIM)
+    detail += days_str
+    if note:
+        detail += colorize(f"  ·  {note}", GRAY + DIM)
+    print(detail)
+
+# ── Prompt helper ──────────────────────────────────────────────────────────────
+def prompt(label, required=True, hint=""):
+    full_label = colorize(label, CYAN + BOLD)
+    if hint:
+        full_label += colorize(f" ({hint})", GRAY)
+    full_label += colorize(" › ", GRAY)
+    while True:
+        try:
+            val = input(full_label).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if not val and not required:
+            return ""
+        if not val:
+            print(colorize("  ✗  This field is required.", RED))
+            continue
+        return val
+
+# ── Add ────────────────────────────────────────────────────────────────────────
+def add_task(prefill_name=None, prefill_due=None):
+    print()
+    print(colorize("  ✦  Add a Task", BOLD + WHITE))
+    print(colorize("  Press Ctrl+C to cancel.\n", GRAY))
+
+    if prefill_name:
+        print(colorize("  Name", CYAN + BOLD) + colorize(" › ", GRAY) + colorize(prefill_name, WHITE))
+        name = prefill_name
+    else:
+        name = prompt("Name")
+
+    due_raw = None
+    due_iso = None
+    if prefill_due:
+        due_iso = prefill_due
+        print(colorize("  Due date", CYAN + BOLD) + colorize(" › ", GRAY) +
+              colorize(fmt_date(due_iso), WHITE))
+    else:
+        while True:
+            due_raw = prompt("Due date",
+                             required=False,
+                             hint="today / tomorrow / monday / next week / 2026-12-25 / leave blank")
+            if not due_raw:
+                break
+            due_iso = parse_due(due_raw)
+            if due_iso and due_iso.startswith("ambiguous:"):
+                # Format: ambiguous:<day>:<this_iso>:<next_iso>
+                _, day_name, this_iso, next_iso = due_iso.split(":")
+                day_cap = day_name.capitalize()
+                print(colorize(f"\n  Today is {day_cap}. Did you mean:", YELLOW))
+                print(colorize(f"    1  ", CYAN + BOLD) + colorize(f"Today  ({fmt_date(this_iso)})", WHITE))
+                print(colorize(f"    2  ", CYAN + BOLD) + colorize(f"Next {day_cap}  ({fmt_date(next_iso)})", WHITE))
+                print()
+                choice = prompt("Choice", hint="1 or 2")
+                if choice.strip() == "1":
+                    due_iso = this_iso
+                elif choice.strip() == "2":
+                    due_iso = next_iso
+                else:
+                    print(colorize("  ✗  Please enter 1 or 2.", RED))
+                    continue
+                d = days_until(due_iso)
+                print(colorize(f"  ✓  {fmt_date(due_iso)}", GREEN) +
+                      colorize(f"  ({d} days)" if d > 0 else "  (today)", GRAY))
+                break
+            elif due_iso:
+                d = days_until(due_iso)
+                if d < 0:
+                    print(colorize(f"  ✓  {fmt_date(due_iso)} — {abs(d)} days ago", YELLOW))
+                else:
+                    print(colorize(f"  ✓  {fmt_date(due_iso)}", GREEN) +
+                          colorize(f"  ({d} days)" if d > 0 else "  (today)", GRAY))
+                break
+            else:
+                print(colorize(f'  ✗  Could not understand "{due_raw}". Try: tomorrow, monday, next week, 2026-12-25', RED))
+
+    note = prompt("Note", required=False, hint="optional")
+
+    tasks = load_tasks()
+    entry = {
+        "id":         next_id(tasks),
+        "name":       name,
+        "due":        due_iso,
+        "note":       note,
+        "done":       False,
+        "created_on": date.today().isoformat(),
+    }
+
+    tasks.append(entry)
+    save_tasks(tasks)
+
+    print()
+    due_display = colorize(fmt_date(due_iso), CYAN) if due_iso else colorize("no due date", GRAY)
+    print(colorize(f"  ✓  #{entry['id']} {name}", GREEN + BOLD) +
+          colorize("  ·  ", GRAY) + due_display)
+    print()
+
+# ── Done ───────────────────────────────────────────────────────────────────────
+def mark_done(tid: int):
+    tasks = load_tasks()
+    for t in tasks:
+        if t["id"] == tid:
+            if t.get("done"):
+                print(colorize(f"  #{tid} is already marked done.", YELLOW))
+                return
+            t["done"] = True
+            t["completed_on"] = date.today().isoformat()
+            save_tasks(tasks)
+            print(colorize(f"\n  ✓  #{tid} ", GREEN + BOLD) +
+                  colorize(t["name"], WHITE) +
+                  colorize("  marked as done.\n", GRAY))
+            return
+    print(colorize(f"\n  ✗  No task with id #{tid}.\n", RED))
+
+# ── Delete ─────────────────────────────────────────────────────────────────────
+def delete_task(tid: int):
+    tasks = load_tasks()
+    match = next((t for t in tasks if t["id"] == tid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No task with id #{tid}.\n", RED))
+        return
+
+    print()
+    confirm = input(
+        colorize(f"  Delete ", GRAY) +
+        colorize(f"#{tid} {match['name']}", BOLD + WHITE) +
+        colorize("? y/N › ", GRAY)
+    ).strip().lower()
+
+    if confirm in ("y", "yes"):
+        tasks = [t for t in tasks if t["id"] != tid]
+        save_tasks(tasks)
+        print(colorize(f"  ✓  #{tid} deleted.\n", GREEN))
+    else:
+        print(colorize("  Cancelled.\n", GRAY))
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main():
+    args = sys.argv[1:]
+
+    # tsk  →  show active tasks
+    if not args:
+        show_tasks(include_done=False)
+        return
+
+    # tsk list  →  show all including done
+    if args == ["list"]:
+        show_tasks(include_done=True)
+        return
+
+    # tsk add
+    if args == ["add"]:
+        add_task()
+        return
+
+    # tsk <id> done | delete
+    if len(args) == 2:
+        try:
+            tid = int(args[0])
+        except ValueError:
+            print(colorize(f"\n  ✗  Unknown command: {' '.join(args)}\n", RED))
+            _usage()
+            return
+
+        cmd = args[1].lower()
+        if cmd == "done":
+            mark_done(tid)
+        elif cmd in ("delete", "del", "rm", "remove"):
+            delete_task(tid)
+        else:
+            print(colorize(f"\n  ✗  Unknown action '{cmd}'. Use: done | delete\n", RED))
+        return
+
+    print(colorize(f"\n  ✗  Unknown command: {' '.join(args)}\n", RED))
+    _usage()
+
+def _usage():
+    print(colorize("  Usage:", BOLD + WHITE))
+    print(colorize("    tsk               ", CYAN) + colorize("Show active tasks", GRAY))
+    print(colorize("    tsk add           ", CYAN) + colorize("Add a task", GRAY))
+    print(colorize("    tsk list          ", CYAN) + colorize("Show all tasks (incl. done)", GRAY))
+    print(colorize("    tsk <id> done     ", CYAN) + colorize("Mark task as done", GRAY))
+    print(colorize("    tsk <id> delete   ", CYAN) + colorize("Delete a task", GRAY))
+    print()
+
+if __name__ == "__main__":
+    main()
