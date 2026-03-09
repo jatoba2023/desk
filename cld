@@ -233,6 +233,46 @@ def prompt_date(label):
               colorize(f"  ({d} days)" if d > 0 else "  (today)" if d == 0 else f"  ({abs(d)}d ago)", GRAY))
         return result
 
+# ── Recurrence helpers ─────────────────────────────────────────────────────────
+def next_recurrence(base: date, freq: str) -> date:
+    if freq == "daily":
+        return base + timedelta(days=1)
+    if freq == "weekly":
+        return base + timedelta(weeks=1)
+    if freq == "monthly":
+        m = base.month + 1
+        y = base.year + (1 if m > 12 else 0)
+        m = m if m <= 12 else 1
+        last = calendar.monthrange(y, m)[1]
+        return date(y, m, min(base.day, last))
+    if freq == "yearly":
+        try:
+            return date(base.year + 1, base.month, base.day)
+        except ValueError:  # Feb 29
+            return date(base.year + 1, base.month, 28)
+    return base
+
+def recurring_occurrences(event, year, month):
+    """Yield dates for a recurring event that fall in (year, month)."""
+    rec = event.get("recurrence")
+    if not rec:
+        return
+    freq       = rec["freq"]
+    until_year = rec["until_year"]
+    skips      = set(event.get("skips", []))
+    base       = date.fromisoformat(event["date"])
+    until      = date(until_year, 12, 31)
+    target_lo  = date(year, month, 1)
+    target_hi  = date(year, month, calendar.monthrange(year, month)[1])
+
+    cur = base
+    while cur <= until:
+        if cur > target_hi:
+            break
+        if cur >= target_lo and cur.isoformat() not in skips:
+            yield cur
+        cur = next_recurrence(cur, freq)
+
 # ── Gather all items for a given month ────────────────────────────────────────
 def gather_month(year: int, month: int):
     """Returns dict: {day_int: [{"label", "icon", "color", "source"}]}"""
@@ -242,18 +282,27 @@ def gather_month(year: int, month: int):
         items.setdefault(day, []).append({"label": label, "icon": icon,
                                            "color": color, "source": source})
 
-    # cld events
+    # cld events (including recurring)
     for e in load_events():
         d = date.fromisoformat(e["date"])
-        if d.year == year and d.month == month:
+        skips = set(e.get("skips", []))
+
+        # Base occurrence
+        if d.year == year and d.month == month and d.isoformat() not in skips:
             add(d.day, e["title"], "◆", MAGENTA, "cld")
-        # multi-day
+        # multi-day continuation
         if e.get("end_date"):
-            ed = date.fromisoformat(e["end_date"])
+            ed  = date.fromisoformat(e["end_date"])
             cur = d + timedelta(days=1)
             while cur <= ed and cur.month == month and cur.year == year:
                 add(cur.day, e["title"] + " (cont.)", "◆", MAGENTA + DIM, "cld")
                 cur += timedelta(days=1)
+
+        # Recurring occurrences (skip the base date, already handled above)
+        if e.get("recurrence"):
+            for occ in recurring_occurrences(e, year, month):
+                if occ != d:  # base already shown
+                    add(occ.day, e["title"], "◆", MAGENTA, "cld")
 
     # tsk due dates
     for t in load_tasks():
@@ -383,21 +432,37 @@ def render_months(months: list):
 def render_agenda(days_ahead=60):
     today = date.today()
     width = min(term_width(), 80)
+    until = today + timedelta(days=days_ahead)
 
-    # Build sorted list of (date, label, icon, color, source)
     entries = []
 
     for e in load_events():
-        d = date.fromisoformat(e["date"])
-        if d >= today and (d - today).days <= days_ahead:
-            entries.append((d, e["title"], "◆", MAGENTA, "cld",
-                            e.get("note", ""), e.get("id")))
+        d     = date.fromisoformat(e["date"])
+        skips = set(e.get("skips", []))
+        title = e["title"]
+        note  = e.get("note", "")
+        eid   = e.get("id")
+
+        # Base occurrence
+        if today <= d <= until and d.isoformat() not in skips:
+            entries.append((d, title, "◆", MAGENTA, "cld", note, eid))
+
+        # Recurring occurrences
+        if e.get("recurrence"):
+            freq       = e["recurrence"]["freq"]
+            until_year = e["recurrence"]["until_year"]
+            rec_until  = date(until_year, 12, 31)
+            cur = next_recurrence(d, freq)
+            while cur <= min(until, rec_until):
+                if cur >= today and cur.isoformat() not in skips:
+                    entries.append((cur, title, "◆", MAGENTA, "cld", note, eid))
+                cur = next_recurrence(cur, freq)
 
     for t in load_tasks():
         if t.get("done") or not t.get("due"):
             continue
         d = date.fromisoformat(t["due"])
-        if d >= today and (d - today).days <= days_ahead:
+        if today <= d <= until:
             entries.append((d, t["name"], "✦", CYAN, "tsk",
                             t.get("note", ""), t.get("id")))
 
@@ -408,7 +473,7 @@ def render_agenda(days_ahead=60):
                 d = date(today.year + 1, b["month"], b["day"])
         except ValueError:
             continue
-        if (d - today).days <= days_ahead:
+        if today <= d <= until:
             entries.append((d, f"{b['name']}'s birthday", "🎂", YELLOW, "bday",
                             b.get("observation", ""), None))
 
@@ -525,6 +590,54 @@ def _print_event_row(e, dim=False):
     print(detail)
 
 # ── Add event ─────────────────────────────────────────────────────────────────
+FREQ_LABELS = {
+    "daily":   "Daily",
+    "weekly":  "Weekly",
+    "monthly": "Monthly",
+    "yearly":  "Yearly",
+}
+
+def prompt_recurrence():
+    """Ask if event recurs; if so, get frequency and until year. Returns dict or None."""
+    print()
+    ans = input(colorize("  Recurring?", CYAN + BOLD) +
+                colorize(" (y/N) › ", GRAY)).strip().lower()
+    if ans not in ("y", "yes"):
+        return None
+
+    # Frequency
+    print()
+    print(colorize("  Frequency", BOLD + WHITE))
+    opts = list(FREQ_LABELS.items())
+    for i, (k, v) in enumerate(opts, 1):
+        print(f"  {colorize(str(i), CYAN + BOLD)}  {colorize(v, WHITE)}")
+    print()
+    while True:
+        raw = prompt("Select", hint="1–4")
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(opts):
+                freq = opts[idx][0]
+                break
+            print(colorize(f"  ✗  Enter 1–{len(opts)}.", RED))
+        except ValueError:
+            print(colorize("  ✗  Enter a number.", RED))
+
+    # Until year
+    current_year = date.today().year
+    while True:
+        raw = prompt("Repeat until year", hint=f"e.g. {current_year + 3}")
+        try:
+            yr = int(raw)
+            if yr >= current_year:
+                break
+            print(colorize(f"  ✗  Year must be {current_year} or later.", RED))
+        except ValueError:
+            print(colorize("  ✗  Enter a 4-digit year.", RED))
+
+    print(colorize(f"  ✓  {FREQ_LABELS[freq]}, until end of {yr}", GREEN))
+    return {"freq": freq, "until_year": yr}
+
 def add_event():
     print()
     print(colorize("  ◆  Add an Event", BOLD + WHITE))
@@ -548,7 +661,8 @@ def add_event():
             print(colorize("  ✗  End date is before start date, skipping.", YELLOW))
             end_iso = ""
 
-    note = prompt("Note", required=False, hint="optional")
+    note      = prompt("Note", required=False, hint="optional")
+    recurrence = prompt_recurrence()
 
     events = load_events()
     entry = {
@@ -560,15 +674,53 @@ def add_event():
     }
     if end_iso:
         entry["end_date"] = end_iso
+    if recurrence:
+        entry["recurrence"] = recurrence
 
     events.append(entry)
     save_events(events)
 
     print()
-    span = f" → {fmt_date(end_iso)}" if end_iso else ""
+    span   = f" → {fmt_date(end_iso)}" if end_iso else ""
+    rec    = f"  ·  {FREQ_LABELS[recurrence['freq']]} until {recurrence['until_year']}" if recurrence else ""
     print(colorize(f"  ✓  #{entry['id']} {title}", GREEN + BOLD) +
-          colorize(f"  ·  {fmt_date(date_iso)}{span}", CYAN))
+          colorize(f"  ·  {fmt_date(date_iso)}{span}{rec}", CYAN))
     print()
+
+# ── Recurring scope prompt ─────────────────────────────────────────────────────
+def prompt_recurrence_scope(action="change"):
+    """For a recurring event, ask whether to affect next occurrence or whole series.
+    Returns 'next' or 'series'."""
+    print()
+    print(colorize(f"  This is a recurring event. {action.capitalize()}:", YELLOW))
+    print(f"  {colorize('1', CYAN + BOLD)}  Next occurrence only")
+    print(f"  {colorize('2', CYAN + BOLD)}  Entire series")
+    print()
+    while True:
+        raw = input(colorize("  Choice", CYAN + BOLD) + colorize(" › ", GRAY)).strip()
+        if raw == "1":
+            return "next"
+        if raw == "2":
+            return "series"
+        print(colorize("  ✗  Enter 1 or 2.", RED))
+
+def next_occurrence_from_today(event):
+    """Return the next ISO date of this recurring event on or after today, or None."""
+    today = date.today()
+    base  = date.fromisoformat(event["date"])
+    rec   = event.get("recurrence")
+    skips = set(event.get("skips", []))
+    if not rec:
+        return None
+    freq       = rec["freq"]
+    until_year = rec["until_year"]
+    until      = date(until_year, 12, 31)
+    cur = base
+    while cur <= until:
+        if cur >= today and cur.isoformat() not in skips:
+            return cur.isoformat()
+        cur = next_recurrence(cur, freq)
+    return None
 
 # ── Delete event ──────────────────────────────────────────────────────────────
 def delete_event(eid: int):
@@ -577,17 +729,136 @@ def delete_event(eid: int):
     if not match:
         print(colorize(f"\n  ✗  No event with id #{eid}.\n", RED))
         return
+
+    is_recurring = bool(match.get("recurrence"))
+    scope        = "series"
+
+    if is_recurring:
+        scope = prompt_recurrence_scope("delete")
+
     print()
-    confirm = input(
-        colorize(f"  Delete ", GRAY) +
-        colorize(f"#{eid} {match['title']}", BOLD + WHITE) +
-        colorize("? y/N › ", GRAY)
-    ).strip().lower()
-    if confirm in ("y", "yes"):
-        save_events([e for e in events if e["id"] != eid])
-        print(colorize(f"  ✓  #{eid} deleted.\n", GREEN))
+    if scope == "next":
+        occ = next_occurrence_from_today(match)
+        if not occ:
+            print(colorize("  ✗  No upcoming occurrences to delete.", YELLOW))
+            return
+        confirm = input(
+            colorize("  Skip occurrence on ", GRAY) +
+            colorize(fmt_date(occ), BOLD + WHITE) +
+            colorize("? y/N › ", GRAY)
+        ).strip().lower()
+        if confirm in ("y", "yes"):
+            match.setdefault("skips", []).append(occ)
+            save_events(events)
+            print(colorize(f"  ✓  Occurrence on {fmt_date(occ)} removed.\n", GREEN))
+        else:
+            print(colorize("  Cancelled.\n", GRAY))
     else:
-        print(colorize("  Cancelled.\n", GRAY))
+        confirm = input(
+            colorize(f"  Delete ", GRAY) +
+            colorize(f"#{eid} {match['title']}", BOLD + WHITE) +
+            colorize((" (entire series)" if is_recurring else "") + "? y/N › ", GRAY)
+        ).strip().lower()
+        if confirm in ("y", "yes"):
+            save_events([e for e in events if e["id"] != eid])
+            print(colorize(f"  ✓  #{eid} deleted.\n", GREEN))
+        else:
+            print(colorize("  Cancelled.\n", GRAY))
+
+# ── Edit event ────────────────────────────────────────────────────────────────
+def edit_event(eid: int):
+    events = load_events()
+    match  = next((e for e in events if e["id"] == eid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No event with id #{eid}.\n", RED))
+        return
+
+    is_recurring = bool(match.get("recurrence"))
+    scope        = "series"
+
+    if is_recurring:
+        scope = prompt_recurrence_scope("edit")
+
+    print()
+    print(colorize("  ◆  Edit Event", BOLD + WHITE))
+    print(colorize("  Press Enter to keep current value.\n", GRAY))
+
+    def pedit(label, current):
+        val = input(colorize(f"  {label}", CYAN + BOLD) +
+                    colorize(f" [{current}]", GRAY) +
+                    colorize(" › ", GRAY)).strip()
+        return val if val else current
+
+    if scope == "next":
+        # Create a one-off override: a new non-recurring event for the next occurrence
+        # and add a skip for that date on the original.
+        occ = next_occurrence_from_today(match)
+        if not occ:
+            print(colorize("  ✗  No upcoming occurrences to edit.", YELLOW))
+            return
+
+        print(colorize(f"  Editing occurrence on {fmt_date(occ)}\n", GRAY))
+        new_title = pedit("Title",    match["title"])
+        new_date  = prompt_date("Date") or occ
+        new_note  = pedit("Note",     match.get("note", ""))
+
+        # Skip the original occurrence
+        match.setdefault("skips", []).append(occ)
+
+        # Create override event
+        override = {
+            "id":         next_id(events),
+            "title":      new_title,
+            "date":       new_date if isinstance(new_date, str) else new_date.isoformat(),
+            "note":       new_note,
+            "created_on": date.today().isoformat(),
+        }
+        if match.get("end_date"):
+            override["end_date"] = match["end_date"]
+        events.append(override)
+        save_events(events)
+        print()
+        print(colorize(f"  ✓  Occurrence updated as #{override['id']}.", GREEN))
+        print()
+
+    else:
+        # Edit the series in place
+        new_title = pedit("Title", match["title"])
+
+        raw_date = input(colorize("  Date", CYAN + BOLD) +
+                         colorize(f" [{fmt_date(match['date'])}]", GRAY) +
+                         colorize(" › ", GRAY)).strip()
+        if raw_date:
+            parsed = parse_date(raw_date)
+            if parsed and not parsed.startswith("ambiguous"):
+                match["date"] = parsed
+            else:
+                print(colorize("  ✗  Could not parse date, keeping original.", YELLOW))
+
+        new_note = pedit("Note", match.get("note", ""))
+
+        # Recurrence settings
+        if is_recurring:
+            rec = match["recurrence"]
+            print()
+            print(colorize(f"  Current recurrence: {FREQ_LABELS[rec['freq']]} until {rec['until_year']}", GRAY))
+            change_rec = input(colorize("  Change recurrence settings?", CYAN + BOLD) +
+                               colorize(" (y/N) › ", GRAY)).strip().lower()
+            if change_rec in ("y", "yes"):
+                new_rec = prompt_recurrence()
+                if new_rec:
+                    match["recurrence"] = new_rec
+                else:
+                    del match["recurrence"]
+                    match.pop("skips", None)
+
+        match["title"] = new_title
+        match["note"]  = new_note
+        save_events(events)
+        print()
+        print(colorize(f"  ✓  #{eid} updated.", GREEN))
+        print()
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
@@ -647,10 +918,17 @@ def main():
         render_months([(int(args[0]), int(args[1]))])
         return
 
-    # cld <id> delete
+    # cld <id> delete / edit
     if len(args) == 2 and args[1].lower() in ("delete", "del", "rm", "remove"):
         try:
             delete_event(int(args[0]))
+        except ValueError:
+            print(colorize(f"\n  ✗  Invalid id '{args[0]}'.\n", RED))
+        return
+
+    if len(args) == 2 and args[1].lower() == "edit":
+        try:
+            edit_event(int(args[0]))
         except ValueError:
             print(colorize(f"\n  ✗  Invalid id '{args[0]}'.\n", RED))
         return
@@ -669,6 +947,7 @@ def _usage():
         ("cld agenda 30",    "Agenda for next N days"),
         ("cld add",          "Add a new event"),
         ("cld list",         "List all events"),
+        ("cld <id> edit",    "Edit an event"),
         ("cld <id> delete",  "Delete an event"),
     ]
     for cmd, desc in rows:
