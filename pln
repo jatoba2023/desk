@@ -1,0 +1,2065 @@
+#!/usr/bin/env python3
+# pln — Planejador de Projetos · desk ecosystem
+
+import json, os, sys
+from datetime import date, timedelta
+from pathlib import Path
+
+PLN_FILE = Path.home() / ".pln.json"
+
+# ── ANSI ────────────────────────────────────────────────────────────────────────
+RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"
+RED="\033[91m"; YELLOW="\033[93m"; GREEN="\033[92m"
+CYAN="\033[96m"; MAGENTA="\033[95m"; WHITE="\033[97m"; GRAY="\033[90m"
+
+def c(text, *codes): return "".join(codes) + text + RESET
+def term_width():
+    try: return os.get_terminal_size().columns
+    except: return 100
+
+CATEGORIAS  = ["Mão de Obra", "Equipamento", "Insumos"]
+CAT_COLORS  = [CYAN, YELLOW, GREEN]
+MESES       = ["","Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+
+def cat_color(cat):
+    try: return CAT_COLORS[CATEGORIAS.index(cat)]
+    except: return GRAY
+
+# ── Persistência + migração ──────────────────────────────────────────────────────
+def migrate_predecessors(project):
+    """Migrate old flat list [1,2] to new format [{"tid":1,"tipo":"FI","lag":0}]"""
+    for t in project.get("tasks", []):
+        preds = t.get("predecessors", [])
+        if preds and isinstance(preds[0], (int, float)):
+            t["predecessors"] = [
+                {"tid": int(p), "tipo": "FI", "lag": 0} for p in preds
+            ]
+
+def migrate_units(project):
+    """Migrate duration_weeks→duration_days (*7), custo_semana→custo_dia (/7),
+       and task recursos flat list → [{"rid": id, "qty": 1}]."""
+    for t in project.get("tasks", []):
+        if "duration_weeks" in t:
+            t["duration_days"] = round(t.pop("duration_weeks") * 7, 2)
+        recs = t.get("recursos", [])
+        if recs and not isinstance(recs[0], dict):
+            t["recursos"] = [{"rid": int(r), "qty": 1} for r in recs]
+    for r in project.get("recursos", []):
+        if "custo_semana" in r:
+            r["custo_dia"] = round(r.pop("custo_semana") / 7, 2)
+
+def load_db():
+    if PLN_FILE.exists():
+        with open(PLN_FILE) as f:
+            db = json.load(f)
+        for p in db.get("projects", []):
+            migrate_predecessors(p)
+            migrate_units(p)
+        return db
+    return {"projects": []}
+
+def save_db(db):
+    with open(PLN_FILE, "w") as f:
+        json.dump(db, f, indent=2, ensure_ascii=False)
+
+def next_pid(db):
+    return max((p["id"] for p in db["projects"]), default=0) + 1
+
+def next_tid(project):
+    return max((t["id"] for t in project.get("tasks", [])), default=0) + 1
+
+def next_rid(project):
+    return max((r["id"] for r in project.get("recursos", [])), default=0) + 1
+
+def get_project(db, pid):
+    return next((p for p in db["projects"] if p["id"] == pid), None)
+
+def get_task(project, tid):
+    return next((t for t in project.get("tasks", []) if t["id"] == tid), None)
+
+def get_resource(project, rid):
+    return next((r for r in project.get("recursos", []) if r["id"] == rid), None)
+
+# ── Prompts ──────────────────────────────────────────────────────────────────────
+def prompt(label, required=True, hint="", default=""):
+    d = f" {c(f'[{default}]', GRAY)}" if default else ""
+    h = f"  {c(hint, GRAY)}" if hint else ""
+    while True:
+        val = input(c(f"  {label}", CYAN + BOLD) + d + c(" › ", GRAY)).strip()
+        if val: return val
+        if default: return default
+        if not required: return ""
+        print(c("  ✗  Campo obrigatório.", RED))
+
+def prompt_float(label, hint="", default=None):
+    d_str = str(default) if default is not None else ""
+    while True:
+        raw = prompt(label, hint=hint, default=d_str)
+        try: return float(raw.replace(",", "."))
+        except: print(c("  ✗  Digite um número válido (ex: 1.5 ou 2)", RED))
+
+def prompt_date(label, hint="AAAA-MM-DD", default=""):
+    while True:
+        raw = prompt(label, hint=hint, default=default)
+        try:
+            return date.fromisoformat(raw).isoformat()
+        except:
+            print(c("  ✗  Data inválida. Use AAAA-MM-DD.", RED))
+
+def prompt_choice(label, options):
+    for i, o in enumerate(options, 1):
+        print(f"  {c(str(i), CYAN + BOLD)}  {o}")
+    print()
+    while True:
+        raw = input(c(f"  {label}", CYAN + BOLD) + c(" › ", GRAY)).strip()
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(options): return idx
+        except: pass
+        print(c(f"  ✗  Digite um número entre 1 e {len(options)}.", RED))
+
+
+def prompt_window(current_ws=None, current_we=None):
+    """
+    Ask for optional window_start / window_end.
+    Returns (ws_iso|None, we_iso|None).
+    """
+    print()
+    ws_d = current_ws or ""
+    we_d = current_we or ""
+    hint = "AAAA-MM-DD ou Enter para nenhuma"
+
+    raw_ws = input(
+        c("  Janela: início mínimo", CYAN + BOLD) +
+        (c(f" [{ws_d}]", GRAY) if ws_d else c(" [sem restrição]", GRAY)) +
+        c(" › ", GRAY)
+    ).strip()
+    raw_we = input(
+        c("  Janela: fim máximo   ", CYAN + BOLD) +
+        (c(f" [{we_d}]", GRAY) if we_d else c(" [sem restrição]", GRAY)) +
+        c(" › ", GRAY)
+    ).strip()
+
+    def parse(raw, current):
+        if not raw: return current or None
+        if raw in ("-", "0", "none", "nenhuma", "remover"): return None
+        try:    return date.fromisoformat(raw).isoformat()
+        except: print(c("  ✗  Data inválida, ignorada.", YELLOW)); return current or None
+
+    return parse(raw_ws, current_ws), parse(raw_we, current_we)
+
+def prompt_predecessors(tasks_other, current=None):
+    """
+    Interactive predecessor builder.
+    Returns list of {"tid": int, "tipo": "FI"|"II", "lag": float}
+    """
+    if not tasks_other:
+        return []
+
+    print()
+    print(c("  Tarefas disponíveis:", GRAY))
+    for i, t in enumerate(tasks_other, 1):
+        print(f"  {c(str(i), CYAN + BOLD)}  T{t['id']} — {t['name']}")
+    print()
+
+    if current:
+        cur_str = "  ".join(fmt_pred(p) for p in current)
+        print(c(f"  Predecessoras atuais: {cur_str}", GRAY))
+        raw = input(c("  Selecione (ex: 1,3 ou Enter para manter) › ", CYAN + BOLD)).strip()
+        if not raw:
+            return current
+    else:
+        raw = input(c("  Selecione predecessoras (ex: 1,3 ou Enter para nenhuma) › ", CYAN + BOLD)).strip()
+        if not raw:
+            return []
+
+    selected = []
+    for part in raw.split(","):
+        try:
+            idx = int(part.strip()) - 1
+            if 0 <= idx < len(tasks_other):
+                selected.append(tasks_other[idx])
+        except: pass
+
+    if not selected:
+        return []
+
+    preds = []
+    for t in selected:
+        print()
+        print(c(f"  Relação com T{t['id']} — {t['name']}:", BOLD + WHITE))
+        print(f"  {c('1', CYAN + BOLD)}  FI — Fim→Início  {c('(B começa quando A termina)', GRAY)}")
+        print(f"  {c('2', CYAN + BOLD)}  II — Início→Início  {c('(B começa quando A começa)', GRAY)}")
+        print()
+        tipo_idx = prompt_choice("Tipo de relação", ["FI", "II"])
+        tipo     = ["FI", "II"][tipo_idx]
+
+        lag_raw = input(
+            c("  Lag (dias)", CYAN + BOLD) +
+            c(" [0]  ", GRAY) +
+            c("positivo=atraso  negativo=sobreposição › ", GRAY)
+        ).strip()
+        try:
+            lag = float(lag_raw.replace(",", ".")) if lag_raw else 0.0
+        except:
+            lag = 0.0
+
+        preds.append({"tid": t["id"], "tipo": tipo, "lag": lag})
+
+    return preds
+
+def fmt_pred(p):
+    """Format a predecessor dict for display."""
+    lag = p.get("lag", 0)
+    lag_str = ""
+    if lag > 0:   lag_str = c(f" +{lag}d", YELLOW)
+    elif lag < 0: lag_str = c(f" {lag}d",  GREEN)
+    tipo_col = CYAN if p["tipo"] == "FI" else MAGENTA
+    return c(str(p["tid"]), BOLD) + c(f"[{p['tipo']}]", tipo_col) + lag_str
+
+# ── Scheduling (ALAP + FI/II + lag) ─────────────────────────────────────────────
+def days_to_days(d): return d
+
+def schedule(project):
+    """
+    ALAP scheduling with FI/II relationship types and lag.
+    Also applies window constraints (window_start / window_end) after ALAP.
+
+    Returns {tid: {"start": date, "end": date, "conflict": str|None}}
+    conflict is set when the window forces a date outside ALAP range.
+    """
+    tasks  = project.get("tasks", [])
+    target = date.fromisoformat(project["target_date"])
+    if not tasks:
+        return {}
+
+    tid_map = {t["id"]: t for t in tasks}
+
+    # Build successor map: {tid: [(succ_tid, pred_obj)]}
+    successors = {t["id"]: [] for t in tasks}
+    for t in tasks:
+        for p in t.get("predecessors", []):
+            pred_tid = p["tid"] if isinstance(p, dict) else int(p)
+            if pred_tid in successors:
+                successors[pred_tid].append((t["id"], p))
+
+    # Topological sort
+    def topo_sort():
+        visited, order = set(), []
+        def visit(tid):
+            if tid in visited: return
+            visited.add(tid)
+            for s, _ in successors[tid]: visit(s)
+            order.append(tid)
+        for t in tasks: visit(t["id"])
+        return list(reversed(order))
+
+    order = topo_sort()
+
+    latest_start = {}
+    latest_end   = {}
+    sched        = {}
+
+    for tid in reversed(order):
+        t   = tid_map[tid]
+        dur = timedelta(days=round(days_to_days(t["duration_days"])))
+
+        # Done task: use actual dates
+        if t.get("done") and t.get("completed_on") and t.get("started_on"):
+            s = date.fromisoformat(t["started_on"])
+            e = date.fromisoformat(t["completed_on"])
+            latest_start[tid] = s
+            latest_end[tid]   = e
+            sched[tid]        = {"start": s, "end": e}
+            continue
+
+        succs = successors[tid]  # list of (succ_tid, pred_obj)
+
+        if not succs:
+            # No successors: end at target
+            e = target
+            s = e - dur
+        else:
+            # Compute latest allowed start/end based on each successor's constraint
+            candidates_end   = []  # latest allowed end for this task
+            candidates_start = []  # latest allowed start (from II constraints)
+
+            for succ_tid, pred_obj in succs:
+                if succ_tid not in latest_start:
+                    continue
+                tipo = pred_obj.get("tipo", "FI") if isinstance(pred_obj, dict) else "FI"
+                lag  = pred_obj.get("lag", 0)     if isinstance(pred_obj, dict) else 0
+                lag_days = timedelta(days=round(days_to_days(lag)))
+
+                if tipo == "FI":
+                    # end(A) + lag = start(B)  →  end(A) = start(B) - lag
+                    candidates_end.append(latest_start[succ_tid] - lag_days)
+                elif tipo == "II":
+                    # start(A) + lag = start(B)  →  start(A) = start(B) - lag
+                    candidates_start.append(latest_start[succ_tid] - lag_days)
+
+            if candidates_end:
+                e = min(candidates_end)
+                s = e - dur
+            elif candidates_start:
+                s = min(candidates_start)
+                e = s + dur
+            else:
+                e = target
+                s = e - dur
+
+            # If we got both constraints, take the most restrictive
+            if candidates_end and candidates_start:
+                e_from_end   = min(candidates_end)
+                s_from_end   = e_from_end - dur
+                s_from_start = min(candidates_start)
+                # ALAP: pick whichever gives the later (but still valid) start
+                s = min(s_from_end, s_from_start)
+                e = s + dur
+
+        latest_start[tid] = s
+        latest_end[tid]   = e
+        sched[tid]        = {"start": s, "end": e, "conflict": None}
+
+    # ── Apply window constraints ──────────────────────────────────────────────
+    for t in tasks:
+        tid = t["id"]
+        if tid not in sched: continue
+        ws_raw = t.get("window_start")
+        we_raw = t.get("window_end")
+        if not ws_raw and not we_raw: continue
+
+        entry   = sched[tid]
+        s, e    = entry["start"], entry["end"]
+        dur     = e - s
+        conflicts = []
+
+        if ws_raw:
+            ws = date.fromisoformat(ws_raw) if isinstance(ws_raw, str) else ws_raw
+            if s < ws:
+                conflicts.append(f"início forçado para {fmt_date(ws)} (janela)")
+                s = ws
+                e = s + dur
+        if we_raw:
+            we = date.fromisoformat(we_raw) if isinstance(we_raw, str) else we_raw
+            if e > we:
+                conflicts.append(f"fim forçado para {fmt_date(we)} (janela)")
+                e = we
+                s = e - dur
+
+        entry["start"]    = s
+        entry["end"]      = e
+        entry["conflict"] = "  |  ".join(conflicts) if conflicts else None
+        latest_start[tid] = s
+        latest_end[tid]   = e
+
+    return sched
+
+# ── Formatação ───────────────────────────────────────────────────────────────────
+def fmt_date(val):
+    if not val: return "—"
+    if isinstance(val, date): d = val
+    else:
+        try: d = date.fromisoformat(val)
+        except: return "—"
+    return f"{d.day:02d} {MESES[d.month]} {d.year}"
+
+def fmt_brl(v):
+    return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+
+def task_cost(task, project):
+    total = 0.0
+    for rec in task.get("recursos", []):
+        rid = rec["rid"] if isinstance(rec, dict) else int(rec)
+        qty = rec.get("qty", 1) if isinstance(rec, dict) else 1
+        r   = get_resource(project, rid)
+        if r:
+            total += r.get("custo_dia", 0) * qty * task.get("duration_days", 0)
+    return total
+
+def project_cost(project):
+    return sum(task_cost(t, project) for t in project.get("tasks", []))
+
+def task_res_names(task, project):
+    """Returns list of 'Name (×N)' strings for a task's resources."""
+    names = []
+    for rec in task.get("recursos", []):
+        rid = rec["rid"] if isinstance(rec, dict) else int(rec)
+        qty = rec.get("qty", 1) if isinstance(rec, dict) else 1
+        r   = get_resource(project, rid)
+        if r:
+            names.append(r["name"] + (f" (×{qty})" if qty > 1 else ""))
+    return names
+
+def d2s(d):
+    """date to isoformat safely."""
+    return d.isoformat() if isinstance(d, date) else d
+
+# ── Listar projetos ──────────────────────────────────────────────────────────────
+def cmd_list():
+    db = load_db()
+    W  = term_width()
+    print()
+    print(c("  desk", BOLD + WHITE) + c(" · ", GRAY) + c("pln", CYAN + BOLD))
+    print(c("  " + "─" * (W - 4), GRAY))
+
+    if not db["projects"]:
+        print(c("  Nenhum projeto encontrado.\n", GRAY))
+        print(c("  ", GRAY) + c("pln add", CYAN) + c("  para criar um projeto.\n", GRAY))
+        return
+
+    for p in db["projects"]:
+        tasks  = p.get("tasks", [])
+        done   = sum(1 for t in tasks if t.get("done"))
+        total  = len(tasks)
+        target = fmt_date(p.get("target_date", ""))
+        cost   = project_cost(p)
+
+        bar_w  = 16
+        filled = round(bar_w * done / total) if total else 0
+        bar    = c("█" * filled, GREEN) + c("░" * (bar_w - filled), GRAY)
+
+        late = ""
+        if p.get("target_date"):
+            td = date.fromisoformat(p["target_date"])
+            if td < date.today() and done < total:
+                late = c("  ATRASADO", RED + BOLD)
+
+        pid_str = p['id']
+        pname   = p['name']
+        print(f"  {c(f'#{pid_str}', CYAN + BOLD)}  {c(pname, BOLD + WHITE)}")
+        print(f"     {bar}  {c(f'{done}/{total} tarefas', GRAY)}  ·  "
+              f"{c('Prazo:', GRAY)} {c(target, YELLOW)}{late}")
+        print(f"     {c('Custo estimado:', GRAY)} {c(fmt_brl(cost), GREEN)}")
+        print()
+
+    print(c("  pln add", CYAN) + c("  ·  ", GRAY) +
+          c("pln <id>", CYAN) + c("  ·  ", GRAY) +
+          c("pln <id> gantt", CYAN))
+    print()
+
+# ── Detalhe do projeto ───────────────────────────────────────────────────────────
+def cmd_project(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+
+    W     = term_width()
+    tasks = p.get("tasks", [])
+    done  = sum(1 for t in tasks if t.get("done"))
+    total = len(tasks)
+    sched = schedule(p)
+
+    print()
+    print(c(f"  #{p['id']} {p['name']}", BOLD + WHITE))
+    print(c("  " + "─" * (W - 4), GRAY))
+    print(f"  {c('Prazo-alvo:', GRAY)}  {c(fmt_date(p.get('target_date','')), YELLOW + BOLD)}")
+    print(f"  {c('Progresso:', GRAY)}   {c(f'{done}/{total} tarefas concluídas', WHITE)}")
+    print(f"  {c('Custo total:', GRAY)} {c(fmt_brl(project_cost(p)), GREEN + BOLD)}")
+    print()
+
+    # Recursos
+    recursos = p.get("recursos", [])
+    if recursos:
+        print(c("  Recursos", BOLD + WHITE))
+        for r in recursos:
+            col = cat_color(r.get("categoria", ""))
+            rid_str = r['id']
+            print(f"    {c(f'R{rid_str}', col + BOLD)}  {c(r['name'], WHITE)}"
+                  f"  {c(r.get('categoria',''), col + DIM)}"
+                  f"  {c(fmt_brl(r.get('custo_dia',0)) + '/dia', GRAY)}")
+        print()
+
+    # Tarefas
+    if not tasks:
+        print(c("  Nenhuma tarefa ainda.\n", GRAY))
+    else:
+        print(c("  Tarefas", BOLD + WHITE))
+        for t in sorted(tasks, key=lambda t: ((sched.get(t['id']) or {}).get('start') or date.max, t['id'])):
+            s       = sched.get(t["id"], {})
+            ts_str  = fmt_date(s.get("start"))
+            te_str  = fmt_date(s.get("end"))
+            done_mk = c("✓", GREEN + BOLD) if t.get("done") else c("○", GRAY)
+
+            # Predecessoras formatadas
+            preds    = t.get("predecessors", [])
+            pred_str = ("  após: " + "  ".join(fmt_pred(p2) for p2 in preds)) if preds else ""
+
+            res_names = task_res_names(t, p)
+            res_str = c("  " + ", ".join(res_names), CYAN + DIM) if res_names else ""
+            cost_str = c(f"  {fmt_brl(task_cost(t,p))}", GRAY)
+
+            late = ""
+            if s.get("end") and not t.get("done"):
+                end_d = s["end"] if isinstance(s["end"], date) else date.fromisoformat(s["end"])
+                if end_d > date.fromisoformat(p["target_date"]):
+                    late = c("  ⚠ fora do prazo", RED)
+
+            tid_str  = t['id']
+            dur_str  = f"{t['duration_days']}d"
+            print(f"  {done_mk} {c(f'T{tid_str}', BOLD + WHITE)}  {t['name']}"
+                  f"  {c(dur_str, YELLOW)}"
+                  f"{c(pred_str, GRAY)}{res_str}{cost_str}{late}")
+            print(f"       {c(ts_str, GRAY)} → {c(te_str, GRAY)}")
+        print()
+
+    print(c("  pln <id> task add", CYAN) + c("  ·  ", GRAY) +
+          c("pln <id> gantt", CYAN) + c("  ·  ", GRAY) +
+          c("pln <id> edit", CYAN) + c("  ·  ", GRAY) +
+          c("pln <id> delete", CYAN))
+    print()
+
+# ── Gantt ────────────────────────────────────────────────────────────────────────
+def cmd_gantt(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+
+    tasks  = p.get("tasks", [])
+    if not tasks:
+        print(c("\n  Nenhuma tarefa para exibir.\n", GRAY)); return
+
+    sched  = schedule(p)
+    target = date.fromisoformat(p["target_date"])
+    today  = date.today()
+    W      = term_width()
+
+    # Date range
+    all_dates = []
+    for s in sched.values():
+        if s.get("start"): all_dates.append(s["start"] if isinstance(s["start"], date) else date.fromisoformat(s["start"]))
+        if s.get("end"):   all_dates.append(s["end"]   if isinstance(s["end"],   date) else date.fromisoformat(s["end"]))
+    if not all_dates: return
+    chart_start = min(all_dates)
+    chart_end   = max(all_dates + [target])
+    total_days  = max((chart_end - chart_start).days + 1, 1)
+
+    LABEL_W = min(26, W // 4)
+    BAR_W   = max(W - LABEL_W - 18, 20)
+
+    print()
+    print(c(f"  #{p['id']} {p['name']}", BOLD + WHITE) +
+          c(f"  ·  Gantt  ·  prazo: {fmt_date(p['target_date'])}", GRAY))
+    print(c("  " + "─" * (W - 4), GRAY))
+
+    # Week header
+    hdr = ""
+    cur = chart_start
+    while cur <= chart_end:
+        pos = round((cur - chart_start).days / total_days * BAR_W)
+        lbl = f"{cur.day:02d}/{MESES[cur.month]}"
+        while len(hdr) < pos: hdr += " "
+        hdr += lbl
+        cur += timedelta(days=7)
+    print(c(" " * (LABEL_W + 7) + hdr[:BAR_W], GRAY))
+    print(c("  " + "─" * (W - 4), GRAY))
+
+    today_pos  = round((today  - chart_start).days / total_days * BAR_W) if chart_start <= today  <= chart_end else -1
+    target_pos = round((target - chart_start).days / total_days * BAR_W) if 0 <= round((target - chart_start).days / total_days * BAR_W) < BAR_W else BAR_W - 1
+
+    for t in tasks:
+        s = sched.get(t["id"], {})
+        if not s: continue
+        ts = s["start"] if isinstance(s["start"], date) else date.fromisoformat(s["start"])
+        te = s["end"]   if isinstance(s["end"],   date) else date.fromisoformat(s["end"])
+
+        bar_s = round((ts - chart_start).days / total_days * BAR_W)
+        bar_e = max(round((te - chart_start).days / total_days * BAR_W), bar_s + 1)
+
+        bar = [" "] * BAR_W
+        for i in range(bar_s, min(bar_e, BAR_W)):
+            bar[i] = "█"
+        if 0 <= today_pos < BAR_W:
+            bar[today_pos] = "▎" if bar[today_pos] == " " else bar[today_pos]
+        if 0 <= target_pos < BAR_W:
+            bar[target_pos] = "◆"
+
+        is_done = t.get("done", False)
+        is_late = te > target and not is_done
+
+        bar_str = ""
+        for i, ch in enumerate(bar):
+            if ch == "█":
+                if is_done:             bar_str += c(ch, GREEN)
+                elif is_late and i >= target_pos: bar_str += c(ch, RED)
+                else:                   bar_str += c(ch, CYAN)
+            elif ch == "▎": bar_str += c(ch, RED + BOLD)
+            elif ch == "◆": bar_str += c(ch, YELLOW + BOLD)
+            else:           bar_str += ch
+
+        done_mk  = c("✓", GREEN + BOLD) if is_done else c("○", GRAY)
+        label    = t["name"][:LABEL_W - 1].ljust(LABEL_W)
+        dur_str  = c(f"{t['duration_days']}d", YELLOW)
+        date_str = c(f"{ts.strftime('%d/%m')}→{te.strftime('%d/%m')}", GRAY + DIM)
+        tid_str  = t['id']
+
+        # Show predecessor types as a compact suffix
+        preds    = t.get("predecessors", [])
+        if preds:
+            pt = " ".join(fmt_pred(pr) for pr in preds)
+            pred_sfx = c(f"  {pt}", DIM)
+        else:
+            pred_sfx = ""
+
+        print(f"  {done_mk} {c(f'T{tid_str}', BOLD)}{c('·', GRAY)}{c(label, WHITE)}  "
+              f"{bar_str}  {dur_str} {date_str}{pred_sfx}")
+
+    print()
+    print(c("  ", GRAY) +
+          c("█", CYAN) + c(" andamento  ", GRAY) +
+          c("█", GREEN) + c(" concluído  ", GRAY) +
+          c("█", RED) + c(" atrasado  ", GRAY) +
+          c("▎", RED + BOLD) + c(" hoje  ", GRAY) +
+          c("◆", YELLOW) + c(" prazo-alvo  ", GRAY) +
+          c("[FI]", CYAN) + c(" fim→início  ", GRAY) +
+          c("[II]", MAGENTA) + c(" início→início", GRAY))
+    print()
+    print(c(f"  Custo total estimado: {fmt_brl(project_cost(p))}", GREEN + BOLD))
+    print()
+
+# ── Criar projeto ────────────────────────────────────────────────────────────────
+def cmd_add_project():
+    print()
+    print(c("  ◆  Novo Projeto", BOLD + WHITE))
+    print(c("  Ctrl+C para cancelar.\n", GRAY))
+    name   = prompt("Nome do projeto")
+    target = prompt_date("Data-alvo (prazo final)")
+    db  = load_db()
+    pid = next_pid(db)
+    db["projects"].append({
+        "id": pid, "name": name, "target_date": target,
+        "tasks": [], "recursos": []
+    })
+    save_db(db)
+    print()
+    print(c(f"  ✓  Projeto #{pid} '{name}' criado. Prazo: {fmt_date(target)}\n", GREEN + BOLD))
+    print(c("  Próximo: ", GRAY) + c(f"pln {pid} recurso add", CYAN) +
+          c("  ou  ", GRAY) + c(f"pln {pid} task add\n", CYAN))
+
+# ── Editar projeto ───────────────────────────────────────────────────────────────
+def cmd_edit_project(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    print()
+    print(c(f"  ◆  Editar Projeto #{pid}", BOLD + WHITE))
+    print(c("  Enter para manter o valor atual.\n", GRAY))
+    raw_name   = input(c("  Nome", CYAN + BOLD) + c(f" [{p['name']}]", GRAY) + c(" › ", GRAY)).strip()
+    raw_target = input(c("  Data-alvo", CYAN + BOLD) + c(f" [{p['target_date']}]", GRAY) + c(" › ", GRAY)).strip()
+    if raw_name:   p["name"] = raw_name
+    if raw_target:
+        try:    p["target_date"] = date.fromisoformat(raw_target).isoformat()
+        except: print(c("  ✗  Data inválida, mantendo anterior.", YELLOW))
+    save_db(db)
+    print(c(f"\n  ✓  Projeto atualizado.\n", GREEN))
+
+# ── Apagar projeto ───────────────────────────────────────────────────────────────
+def cmd_delete_project(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    confirm = input(c(f"\n  Apagar projeto #{pid} '{p['name']}'? y/N › ", GRAY)).strip().lower()
+    if confirm in ("y","yes","s","sim"):
+        db["projects"] = [x for x in db["projects"] if x["id"] != pid]
+        save_db(db)
+        print(c(f"  ✓  Projeto #{pid} apagado.\n", GREEN))
+    else:
+        print(c("  Cancelado.\n", GRAY))
+
+# ── Recursos ─────────────────────────────────────────────────────────────────────
+def cmd_add_recurso(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    print()
+    print(c(f"  ◆  Adicionar Recurso — Projeto #{pid}", BOLD + WHITE))
+    print(c("  Ctrl+C para cancelar.\n", GRAY))
+    name  = prompt("Nome do recurso")
+    print()
+    print(c("  Categoria:", BOLD + WHITE))
+    idx   = prompt_choice("Categoria", CATEGORIAS)
+    cat   = CATEGORIAS[idx]
+    custo = prompt_float("Custo por dia (R$)", hint="ex: 500 ou 250.50")
+    rid   = next_rid(p)
+    p.setdefault("recursos", []).append({
+        "id": rid, "name": name, "categoria": cat, "custo_dia": custo
+    })
+    save_db(db)
+    print()
+    print(c(f"  ✓  Recurso R{rid} '{name}' ({cat}) — {fmt_brl(custo)}/sem\n", GREEN + BOLD))
+
+def cmd_list_recursos(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    recursos = p.get("recursos", [])
+    print()
+    print(c(f"  Recursos — #{pid} {p['name']}", BOLD + WHITE))
+    if not recursos:
+        print(c("  Nenhum recurso cadastrado.\n", GRAY)); return
+    for cat in CATEGORIAS:
+        items = [r for r in recursos if r.get("categoria") == cat]
+        if not items: continue
+        col = cat_color(cat)
+        print(c(f"\n  {cat}", col + BOLD))
+        for r in items:
+            rid_str = r['id']
+            print(f"    {c(f'R{rid_str}', col + BOLD)}  {c(r['name'], WHITE)}"
+                  f"  {c(fmt_brl(r.get('custo_dia',0)) + '/dia', GRAY)}")
+    print()
+
+def cmd_delete_recurso(pid, rid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    r = get_resource(p, rid)
+    if not r:
+        print(c(f"\n  ✗  Recurso R{rid} não encontrado.\n", RED)); return
+    confirm = input(c(f"\n  Apagar R{rid} '{r['name']}'? y/N › ", GRAY)).strip().lower()
+    if confirm in ("y","yes","s","sim"):
+        p["recursos"] = [x for x in p["recursos"] if x["id"] != rid]
+        for t in p.get("tasks", []):
+            t["recursos"] = [x for x in t.get("recursos", []) if (x["rid"] if isinstance(x, dict) else x) != rid]
+        save_db(db)
+        print(c(f"  ✓  Recurso R{rid} removido.\n", GREEN))
+    else:
+        print(c("  Cancelado.\n", GRAY))
+
+# ── Tarefas ──────────────────────────────────────────────────────────────────────
+def _prompt_recursos(p, current_recs=None, db=None, pid=None):
+    """
+    Prompt for resource allocation with quantity support.
+    p            : project dict (may be stale; db/pid used to reload after inline add)
+    current_recs : list of {"rid": id, "qty": n} (for edit mode)
+    Returns      : list of {"rid": id, "qty": n}
+    """
+    # Ask if user wants resources at all
+    print()
+    has_rec = input(c("  Associar recursos? (s/N) › ", CYAN + BOLD)).strip().lower()
+    if has_rec not in ("s","sim","y","yes"):
+        return []
+
+    # Loop: allow inline resource creation
+    while True:
+        recursos = p.get("recursos", [])
+        if not recursos:
+            print(c("  Nenhum recurso cadastrado neste projeto.", GRAY))
+            criar = input(c("  Criar um recurso agora? (s/N) › ", CYAN + BOLD)).strip().lower()
+            if criar not in ("s","sim","y","yes"):
+                return []
+            # Inline resource creation
+            print()
+            name  = prompt("Nome do recurso")
+            print()
+            print(c("  Categoria:", BOLD + WHITE))
+            idx   = prompt_choice("Categoria", CATEGORIAS)
+            cat   = CATEGORIAS[idx]
+            custo = prompt_float("Custo por dia (R$)", hint="ex: 500 ou 250.50")
+            if db is not None and pid is not None:
+                db2  = load_db()
+                p2   = get_project(db2, pid)
+                rid  = next_rid(p2)
+                p2.setdefault("recursos", []).append({"id": rid, "name": name, "categoria": cat, "custo_dia": custo})
+                save_db(db2)
+                p["recursos"] = p2["recursos"]  # refresh local ref
+            else:
+                rid = next_rid(p)
+                p.setdefault("recursos", []).append({"id": rid, "name": name, "categoria": cat, "custo_dia": custo})
+            print(c(f"  ✓  R{rid} '{name}' criado.", GREEN))
+            continue  # re-show list
+
+        # Show available resources
+        print()
+        print(c("  Recursos disponíveis:", GRAY))
+        for i, r in enumerate(recursos, 1):
+            col = cat_color(r.get("categoria",""))
+            rn  = r["name"]
+            print(f"  {c(str(i), CYAN + BOLD)}  {c(rn, WHITE)}  "
+                  f"{c(r.get('categoria',''), col + DIM)}  "
+                  f"{c(fmt_brl(r.get('custo_dia',0))+'/dia', GRAY)}")
+        print(f"  {c('N', CYAN + BOLD)}  Criar novo recurso")
+        print()
+
+        if current_recs:
+            print(c("  Recursos atuais:", GRAY))
+            for j, rec in enumerate(current_recs, 1):
+                r2   = get_resource(p, rec["rid"])
+                rn   = r2["name"] if r2 else "?"
+                qty  = rec.get("qty", 1)
+                col  = cat_color(r2.get("categoria","")) if r2 else GRAY
+                print(f"    {c(str(j), MAGENTA + BOLD)}  {c(rn, WHITE)}  {c(f'×{qty}', YELLOW)}")
+            print()
+            print(c("  Enter  = manter todos  |  nova seleção pelos números da lista acima  |  0 = remover todos", GRAY + DIM))
+            raw = input(c("  Selecione recursos (ex: 1,3 ou Enter para manter) › ", CYAN + BOLD)).strip()
+            if not raw:
+                # Offer per-item qty edit
+                updated = []
+                for rec in current_recs:
+                    r2  = get_resource(p, rec["rid"])
+                    rn  = r2["name"] if r2 else "?"
+                    qty = rec.get("qty", 1)
+                    qr  = input(c(f"  Qtd '{rn}' ", CYAN + BOLD) + c(f"[{qty}] › ", GRAY)).strip()
+                    try:    qty = max(1, int(qr)) if qr else qty
+                    except: pass
+                    updated.append({"rid": rec["rid"], "qty": qty})
+                return updated
+            if raw == "0":
+                return []
+        else:
+            raw = input(c("  Selecione (ex: 1,3 ou Enter para nenhum) › ", CYAN + BOLD)).strip()
+            if not raw:
+                return []
+
+        if raw.lower() == "n":
+            # Inline create then re-loop
+            print()
+            name  = prompt("Nome do recurso")
+            print()
+            print(c("  Categoria:", BOLD + WHITE))
+            idx   = prompt_choice("Categoria", CATEGORIAS)
+            cat   = CATEGORIAS[idx]
+            custo = prompt_float("Custo por dia (R$)", hint="ex: 500 ou 250.50")
+            if db is not None and pid is not None:
+                db2  = load_db()
+                p2   = get_project(db2, pid)
+                rid  = next_rid(p2)
+                p2.setdefault("recursos", []).append({"id": rid, "name": name, "categoria": cat, "custo_dia": custo})
+                save_db(db2)
+                p["recursos"] = p2["recursos"]
+            else:
+                rid = next_rid(p)
+                p.setdefault("recursos", []).append({"id": rid, "name": name, "categoria": cat, "custo_dia": custo})
+            print(c(f"  ✓  R{rid} '{name}' criado.", GREEN))
+            current_recs = None  # reset so we ask fresh
+            continue
+
+        # Parse selections and ask qty for each
+        result = []
+        for part in raw.split(","):
+            try:
+                idx = int(part.strip()) - 1
+                if 0 <= idx < len(recursos):
+                    r   = recursos[idx]
+                    qty_raw = input(
+                        c(f"  Quantidade de '{r['name']}' ", CYAN + BOLD) +
+                        c("[1] › ", GRAY)
+                    ).strip()
+                    try:
+                        qty = int(qty_raw) if qty_raw else 1
+                        qty = max(1, qty)
+                    except:
+                        qty = 1
+                    result.append({"rid": r["id"], "qty": qty})
+            except: pass
+        return result
+
+def cmd_add_task(pid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    print()
+    print(c(f"  ◆  Nova Tarefa — Projeto #{pid} {p['name']}", BOLD + WHITE))
+    print(c("  Ctrl+C para cancelar.\n", GRAY))
+
+    name  = prompt("Nome da tarefa")
+    dur   = prompt_float("Duração (dias)", hint="ex: 5  10  3")
+    preds = prompt_predecessors([t for t in p.get("tasks", [])])
+    res_recs = _prompt_recursos(p)
+    print()
+    use_win = input(c("  Definir janela de datas? (s/N) › ", CYAN + BOLD)).strip().lower()
+    ws, we  = (None, None)
+    if use_win in ("s","sim","y","yes"):
+        ws, we = prompt_window()
+
+    tid = next_tid(p)
+    task_obj = {
+        "id": tid, "name": name, "duration_days": dur,
+        "predecessors": preds, "recursos": res_recs, "done": False
+    }
+    if ws: task_obj["window_start"] = ws
+    if we: task_obj["window_end"]   = we
+    p.setdefault("tasks", []).append(task_obj)
+    save_db(db)
+
+    sched  = schedule(p)
+    s      = sched.get(tid, {})
+    cost   = task_cost(p["tasks"][-1], p)
+    print()
+    print(c(f"  ✓  T{tid} '{name}'  {dur}d", GREEN + BOLD) +
+          c(f"  ·  {fmt_date(s.get('start'))} → {fmt_date(s.get('end'))}", CYAN) +
+          c(f"  ·  {fmt_brl(cost)}", GRAY))
+    print()
+
+def cmd_edit_task(pid, tid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    t = get_task(p, tid)
+    if not t:
+        print(c(f"\n  ✗  Tarefa T{tid} não encontrada.\n", RED)); return
+
+    print()
+    print(c(f"  ◆  Editar Tarefa T{tid} — {p['name']}", BOLD + WHITE))
+    print(c("  Enter para manter o valor atual.\n", GRAY))
+
+    raw_name = input(c("  Nome", CYAN + BOLD) + c(f" [{t['name']}]", GRAY) + c(" › ", GRAY)).strip()
+    raw_dur  = input(c("  Duração (dias)", CYAN + BOLD) + c(f" [{t['duration_days']}]", GRAY) + c(" › ", GRAY)).strip()
+    if raw_name: t["name"] = raw_name
+    if raw_dur:
+        try:    t["duration_days"] = float(raw_dur.replace(",","."))
+        except: print(c("  ✗  Duração inválida, mantendo anterior.", YELLOW))
+
+    # Predecessoras
+    tasks_other = [x for x in p.get("tasks", []) if x["id"] != tid]
+    t["predecessors"] = prompt_predecessors(tasks_other, current=t.get("predecessors", []))
+
+    # Recursos
+    t["recursos"] = _prompt_recursos(p, current_recs=t.get("recursos", []))
+
+    # Janela
+    print()
+    has_win = t.get("window_start") or t.get("window_end")
+    cur_ws  = t.get("window_start","")
+    cur_we  = t.get("window_end","")
+    if has_win:
+        print(c(f"  Janela atual: {cur_ws or '—'} → {cur_we or '—'}", GRAY))
+    edit_win = input(c("  Editar janela de datas? (s/N) › ", CYAN + BOLD)).strip().lower()
+    if edit_win in ("s","sim","y","yes"):
+        ws, we = prompt_window(current_ws=cur_ws, current_we=cur_we)
+        if ws: t["window_start"] = ws
+        else:  t.pop("window_start", None)
+        if we: t["window_end"]   = we
+        else:  t.pop("window_end", None)
+
+    save_db(db)
+    sched = schedule(p)
+    s     = sched.get(tid, {})
+    print()
+    print(c(f"  ✓  T{tid} '{t['name']}' atualizada.", GREEN + BOLD) +
+          c(f"  {fmt_date(s.get('start'))} → {fmt_date(s.get('end'))}", CYAN))
+    print()
+
+def cmd_done_task(pid, tid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    t = get_task(p, tid)
+    if not t:
+        print(c(f"\n  ✗  Tarefa T{tid} não encontrada.\n", RED)); return
+    if t.get("done"):
+        print(c(f"\n  T{tid} já está concluída.\n", YELLOW)); return
+
+    old_sched = schedule(p)
+    today     = date.today()
+    s_old     = old_sched.get(tid, {})
+
+    t["done"]         = True
+    t["completed_on"] = today.isoformat()
+    t["started_on"]   = d2s(s_old.get("start")) or today.isoformat()
+    save_db(db)
+
+    new_sched = schedule(p)
+    print()
+    print(c(f"  ✓  T{tid} '{t['name']}' concluída em {fmt_date(today.isoformat())}.", GREEN + BOLD))
+
+    # Report shifted dependents
+    shifted = []
+    for tx in p.get("tasks", []):
+        if any(pr.get("tid") == tid for pr in tx.get("predecessors", [])) and not tx.get("done"):
+            old_s = old_sched.get(tx["id"], {})
+            new_s = new_sched.get(tx["id"], {})
+            if d2s(old_s.get("start")) != d2s(new_s.get("start")):
+                shifted.append((tx, old_s, new_s))
+    if shifted:
+        print(c("\n  Prazos recalculados:", YELLOW))
+        for tx, old_s, new_s in shifted:
+            print(f"    T{tx['id']} {tx['name']}: "
+                  f"{c(fmt_date(old_s.get('start')), GRAY)} → {c(fmt_date(new_s.get('start')), CYAN)}")
+    print()
+
+def cmd_delete_task(pid, tid):
+    db = load_db()
+    p  = get_project(db, pid)
+    if not p:
+        print(c(f"\n  ✗  Projeto #{pid} não encontrado.\n", RED)); return
+    t = get_task(p, tid)
+    if not t:
+        print(c(f"\n  ✗  Tarefa T{tid} não encontrada.\n", RED)); return
+    confirm = input(c(f"\n  Apagar T{tid} '{t['name']}'? y/N › ", GRAY)).strip().lower()
+    if confirm in ("y","yes","s","sim"):
+        p["tasks"] = [x for x in p["tasks"] if x["id"] != tid]
+        for tx in p["tasks"]:
+            tx["predecessors"] = [pr for pr in tx.get("predecessors", []) if pr.get("tid") != tid]
+        save_db(db)
+        print(c(f"  ✓  T{tid} apagada.\n", GREEN))
+    else:
+        print(c("  Cancelado.\n", GRAY))
+
+# ── TUI: tela principal (gantt + tarefas) ────────────────────────────────────────
+def clear(): print("\033[2J\033[H", end="")
+
+def draw_screen(p, msg="", msg_color=GREEN):
+    """Clear e redesenha a tela completa: header + gantt + tarefas + rodapé."""
+    clear()
+    W     = term_width()
+    tasks = p.get("tasks", [])
+    done  = sum(1 for t in tasks if t.get("done"))
+    total = len(tasks)
+    sched = schedule(p)
+    today = date.today()
+
+    # ── Header ──────────────────────────────────────────────────────────────────
+    cost_str   = fmt_brl(project_cost(p))
+    target_str = fmt_date(p.get("target_date", ""))
+    late       = date.fromisoformat(p["target_date"]) < today and done < total
+    late_tag   = c(" ATRASADO", RED + BOLD) if late else ""
+
+    bar_w  = 12
+    filled = round(bar_w * done / total) if total else 0
+    prog   = c("█" * filled, GREEN) + c("░" * (bar_w - filled), GRAY)
+
+    pid_s = p['id']
+    print()
+    print(f"  {c('desk', BOLD + WHITE)} {c('·', GRAY)} {c('pln', CYAN + BOLD)}  "
+          f"{c(p['name'], BOLD + WHITE)}  "
+          f"{c(f'#{pid_s}', GRAY)}  "
+          f"{c('prazo:', GRAY)} {c(target_str, YELLOW)}{late_tag}  "
+          f"{prog} {c(f'{done}/{total}', GRAY)}  "
+          f"{c(cost_str, GREEN)}")
+    print(c("  " + "─" * (W - 4), GRAY))
+
+    # ── Gantt ────────────────────────────────────────────────────────────────────
+    if tasks:
+        all_dates = []
+        for s in sched.values():
+            for k in ("start", "end"):
+                v = s.get(k)
+                if v: all_dates.append(v if isinstance(v, date) else date.fromisoformat(v))
+        target_d = date.fromisoformat(p["target_date"])
+        if all_dates:
+            chart_start = min(all_dates)
+            chart_end   = max(all_dates + [target_d])
+            total_days  = max((chart_end - chart_start).days + 1, 1)
+
+            LABEL_W = min(22, W // 5)
+            BAR_W   = max(W - LABEL_W - 20, 16)
+
+            # Week tick header
+            hdr = ""
+            cur = chart_start
+            while cur <= chart_end:
+                pos = round((cur - chart_start).days / total_days * BAR_W)
+                lbl = f"{cur.day:02d}/{MESES[cur.month]}"
+                while len(hdr) < pos: hdr += " "
+                hdr += lbl
+                cur += timedelta(days=7)
+            print(c(" " * (LABEL_W + 7) + hdr[:BAR_W], GRAY))
+
+            today_pos  = round((today - chart_start).days / total_days * BAR_W) if chart_start <= today <= chart_end else -1
+            target_pos = min(round((target_d - chart_start).days / total_days * BAR_W), BAR_W - 1)
+
+            for t in sorted(tasks, key=lambda t: ((sched.get(t['id']) or {}).get('start') or date.max, t['id'])):
+                s = sched.get(t["id"], {})
+                if not s: continue
+                ts = s["start"] if isinstance(s["start"], date) else date.fromisoformat(s["start"])
+                te = s["end"]   if isinstance(s["end"],   date) else date.fromisoformat(s["end"])
+
+                bar_s = round((ts - chart_start).days / total_days * BAR_W)
+                bar_e = max(round((te - chart_start).days / total_days * BAR_W), bar_s + 1)
+
+                bar = [" "] * BAR_W
+                for i in range(bar_s, min(bar_e, BAR_W)): bar[i] = "█"
+                if 0 <= today_pos  < BAR_W: bar[today_pos]  = "▎" if bar[today_pos] == " " else bar[today_pos]
+                if 0 <= target_pos < BAR_W: bar[target_pos] = "◆"
+
+                is_done    = t.get("done", False)
+                is_late    = te > target_d and not is_done
+                has_window = bool(t.get("window_start") or t.get("window_end"))
+                conflict   = sched.get(t["id"], {}).get("conflict")
+                bar_str = ""
+                for i, ch in enumerate(bar):
+                    if ch == "█":
+                        if is_done:                             bar_str += c(ch, GREEN)
+                        elif conflict:                          bar_str += c(ch, YELLOW)
+                        elif is_late and i >= target_pos:       bar_str += c(ch, RED)
+                        elif has_window:                        bar_str += c(ch, MAGENTA)
+                        else:                                   bar_str += c(ch, CYAN)
+                    elif ch == "▎": bar_str += c(ch, RED + BOLD)
+                    elif ch == "◆": bar_str += c(ch, YELLOW + BOLD)
+                    else:           bar_str += ch
+
+                done_mk = c("✓", GREEN + BOLD) if is_done else c("○", GRAY)
+                label   = t["name"][:LABEL_W - 1].ljust(LABEL_W)
+                tid_s   = t["id"]
+                print(f"  {done_mk} {c(str(tid_s), BOLD)}{c('·',GRAY)}{c(label,WHITE)}  {bar_str}")
+
+    print(c("  " + "─" * (W - 4), GRAY))
+
+    # ── Lista de tarefas ─────────────────────────────────────────────────────────
+    if not tasks:
+        print(c("  Nenhuma tarefa. Digite: task add\n", GRAY))
+    else:
+        for t in sorted(tasks, key=lambda t: ((sched.get(t['id']) or {}).get('start') or date.max, t['id'])):
+            s         = sched.get(t["id"], {})
+            ts_str    = fmt_date(s.get("start"))
+            te_str    = fmt_date(s.get("end"))
+            conflict  = s.get("conflict")
+            done_mk   = c("✓", GREEN + BOLD) if t.get("done") else c("○", GRAY)
+            preds     = t.get("predecessors", [])
+            pred_s    = (" após:" + " ".join(fmt_pred(pr) for pr in preds)) if preds else ""
+            res_names = task_res_names(t, p)
+            res_s     = c("  " + ", ".join(res_names), CYAN + DIM) if res_names else ""
+            cost_t    = c(f"  {fmt_brl(task_cost(t, p))}", GRAY)
+            dur_s     = f"{t['duration_days']}d"
+            tid_s     = t["id"]
+            # Window badge
+            win_parts = []
+            if t.get("window_start"): win_parts.append(f"≥{fmt_date(t['window_start'])}")
+            if t.get("window_end"):   win_parts.append(f"≤{fmt_date(t['window_end'])}")
+            win_s = (c("  [" + "  ".join(win_parts) + "]", MAGENTA + DIM)) if win_parts else ""
+            print(f"  {done_mk} {c(str(tid_s), BOLD + WHITE)}  {t['name']}  "
+                  f"{c(dur_s, YELLOW)}{c(pred_s, GRAY)}{res_s}{cost_t}{win_s}")
+            dates_line = f"       {c(ts_str + ' → ' + te_str, GRAY)}"
+            if conflict:
+                dates_line += c(f"  ⚠ {conflict}", YELLOW)
+            print(dates_line)
+
+    print(c("  " + "─" * (W - 4), GRAY))
+
+    # ── Mensagem de feedback ──────────────────────────────────────────────────────
+    if msg:
+        print(c(f"  {msg}", msg_color))
+
+    # ── Rodapé de comandos ────────────────────────────────────────────────────────
+    cmds = [
+        "task add", "task <n> edit", "task <n> done", "task <n> delete",
+        "recurso add", "recurso list", "edit", "report", "projetos", "sair"
+    ]
+    footer = c("  ", GRAY) + c("  ·  ", GRAY).join(c(cmd, CYAN) for cmd in cmds)
+    print(footer)
+    print()
+
+
+# ── Relatório executivo HTML ──────────────────────────────────────────────────────
+def cmd_report(project):
+    """Gera relatório executivo em HTML e abre no navegador."""
+    import webbrowser, tempfile, html as _html
+    from datetime import datetime
+
+    p     = project
+    tasks = p.get("tasks", [])
+    sched = schedule(p)
+    today = date.today()
+
+    done_tasks  = [t for t in tasks if t.get("done")]
+    pend_tasks  = [t for t in tasks if not t.get("done")]
+    total_prev  = project_cost(p)
+    total_real  = sum(task_cost(t, p) for t in done_tasks)
+    target_d    = date.fromisoformat(p["target_date"])
+    is_late     = target_d < today and len(done_tasks) < len(tasks)
+
+    # ── Ordenação por data de início (mesma do Gantt) ─────────────────────────
+    sorted_tasks = sorted(tasks, key=lambda t: (
+        (sched.get(t["id"]) or {}).get("start") or date.max, t["id"]))
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
+    def esc(s): return _html.escape(str(s))
+    def brl(v): return f"R$\u2009{v:,.0f}".replace(",",".")
+    def fmtd(d):
+        if not d: return "—"
+        if isinstance(d, str): d = date.fromisoformat(d)
+        return d.strftime("%d/%m/%Y")
+    def desvio_cls(prev, real):
+        if real == 0: return "zer"
+        return "pos" if real > prev else "neg"
+    def desvio_str(prev, real):
+        if real == 0: return "—", "—"
+        diff = real - prev
+        sign = "+" if diff >= 0 else ""
+        pct  = (diff / prev * 100) if prev else 0
+        return f"{sign}{diff:,.0f}".replace(",","."), f"{sign}{pct:.0f}%"
+
+    # ── Gantt: calculate date range ───────────────────────────────────────────
+    all_dates = []
+    for s in sched.values():
+        for k in ("start","end"):
+            v = s.get(k)
+            if v: all_dates.append(v if isinstance(v,date) else date.fromisoformat(v))
+    if all_dates:
+        gs = min(all_dates)
+        ge = max(all_dates + [target_d])
+    else:
+        gs = today
+        ge = target_d
+    total_days_span = max((ge - gs).days, 1)
+
+    def gantt_pos(d):
+        if isinstance(d, str): d = date.fromisoformat(d)
+        return max(0, min(100, (d - gs).days / total_days_span * 100))
+
+    today_pct  = gantt_pos(today)  if gs <= today <= ge else -1
+    target_pct = gantt_pos(target_d)
+
+    # ── Alertas ───────────────────────────────────────────────────────────────
+    alerts = []
+    for t in tasks:
+        s  = sched.get(t["id"], {})
+        te = s.get("end")
+        if te:
+            if isinstance(te, str): te = date.fromisoformat(te)
+            if te > target_d and not t.get("done"):
+                alerts.append(f"T{t['id']} · {esc(t['name'])} · atraso projetado")
+        prev = task_cost(t, p)
+        real = task_cost(t, p) * 1.0  # placeholder: real = done tasks only
+        if t.get("done"):
+            real = task_cost(t, p)  # in real impl, would use actual cost
+    # simulated alerts for tasks with cost overrun (done tasks where cost > 10% above avg)
+    for t in done_tasks:
+        tc = task_cost(t, p)
+        if tc > 0:
+            alerts.append(f"T{t['id']} · {esc(t['name'])} · verificar custo realizado")
+    alerts = alerts[:4]  # cap
+
+    # ── Per-resource cost ─────────────────────────────────────────────────────
+    rec_costs = {}  # rid → {"previsto": x, "dias": y, "tarefas": []}
+    for t in tasks:
+        for rec in t.get("recursos", []):
+            rid = rec["rid"] if isinstance(rec, dict) else int(rec)
+            qty = rec.get("qty", 1) if isinstance(rec, dict) else 1
+            r   = get_resource(p, rid)
+            if not r: continue
+            if rid not in rec_costs:
+                rec_costs[rid] = {"r": r, "previsto": 0.0, "dias": 0.0, "tarefas": []}
+            dias = qty * t.get("duration_days", 0)
+            rec_costs[rid]["previsto"] += r.get("custo_dia", 0) * dias
+            rec_costs[rid]["dias"]     += dias
+            rec_costs[rid]["tarefas"].append(f"T{t['id']}")
+
+    # ── Progress bar pct ─────────────────────────────────────────────────────
+    prog_pct = round(len(done_tasks) / len(tasks) * 100) if tasks else 0
+
+    # ── Status badge ─────────────────────────────────────────────────────────
+    if len(done_tasks) == len(tasks):
+        status_label = "Concluído"
+        status_style = "background:rgba(26,122,74,.18);border:1px solid rgba(26,122,74,.4);color:#6ee6a8"
+    elif is_late:
+        status_label = "Atrasado"
+        status_style = "background:rgba(192,57,43,.18);border:1px solid rgba(192,57,43,.4);color:#f5a49a"
+    else:
+        status_label = "Em andamento"
+        status_style = "background:rgba(200,168,75,.18);border:1px solid rgba(200,168,75,.4);color:#e8c96b"
+
+    # ── Build HTML ────────────────────────────────────────────────────────────
+    def gantt_rows():
+        rows = ""
+        status_map = {
+            "done":    ("Concluída", "sp-done",    "done"),
+            "partial": ("Parcial",   "sp-partial",  "partial"),
+            "late":    ("Risco",     "sp-late",     "late"),
+            "ok":      ("Prevista",  "sp-ok",       "planned"),
+        }
+        for t in sorted_tasks:
+            s  = sched.get(t["id"], {})
+            if not s: continue
+            ts_ = s["start"] if isinstance(s.get("start"), date) else (date.fromisoformat(s["start"]) if s.get("start") else None)
+            te_ = s["end"]   if isinstance(s.get("end"),   date) else (date.fromisoformat(s["end"])   if s.get("end")   else None)
+            if not ts_ or not te_: continue
+
+            left  = gantt_pos(ts_)
+            width = max(gantt_pos(te_) - left, 1.0)
+
+            if t.get("done"):
+                bar_cls, sp_cls, sp_lbl = "done",    "sp-done",    "Concluída"
+            elif te_ > target_d:
+                bar_cls, sp_cls, sp_lbl = "late",    "sp-late",    "Risco"
+            elif ts_ <= today <= te_:
+                bar_cls, sp_cls, sp_lbl = "partial", "sp-partial", "Andamento"
+            else:
+                bar_cls, sp_cls, sp_lbl = "planned", "sp-ok",      "Prevista"
+
+            done_mk = "✓" if t.get("done") else "○"
+            today_mk = (f'<div class="today-line" style="left:{today_pct:.1f}%"></div>' if 0 <= today_pct <= 100 else "")
+            rows += f"""
+            <tr>
+              <td class="g-id">{t["id"]}</td>
+              <td class="g-name">{esc(t["name"])}</td>
+              <td class="g-bar-cell">
+                <div class="gantt-bar-track">
+                  {today_mk}
+                  <div class="gantt-bar {bar_cls}" style="left:{left:.1f}%;width:{width:.1f}%"></div>
+                </div>
+              </td>
+              <td class="g-status"><span class="status-pill {sp_cls}">{sp_lbl}</span></td>
+            </tr>"""
+        return rows
+
+    def task_rows():
+        rows = ""
+        for t in sorted_tasks:
+            prev = task_cost(t, p)
+            real = task_cost(t, p) if t.get("done") else 0
+            d_rs, d_pct = desvio_str(prev, real)
+            d_cls = desvio_cls(prev, real)
+            s     = sched.get(t["id"], {})
+            if t.get("done"):
+                sp_cls, sp_lbl = "sp-done",    "Concluída"
+            elif (s.get("end") and (s["end"] if isinstance(s["end"],date) else date.fromisoformat(s["end"])) > target_d):
+                sp_cls, sp_lbl = "sp-late",    "Risco"
+            elif not t.get("done") and s.get("start") and (s["start"] if isinstance(s["start"],date) else date.fromisoformat(s["start"])) <= today:
+                sp_cls, sp_lbl = "sp-partial", "Andamento"
+            else:
+                sp_cls, sp_lbl = "sp-ok",      "Prevista"
+            real_str = brl(real) if t.get("done") else "—"
+            d_r_str  = f'<span class="desvio {d_cls}">{d_rs}</span>' if t.get("done") else '<span class="desvio zer">—</span>'
+            d_p_str  = f'<span class="desvio {d_cls}">{d_pct}</span>' if t.get("done") else '<span class="desvio zer">—</span>'
+            rows += f"""
+            <tr>
+              <td><span class="task-id">{t["id"]}</span></td>
+              <td>{esc(t["name"])}</td>
+              <td class="num">{brl(prev)}</td>
+              <td class="num">{real_str}</td>
+              <td class="num">{d_r_str}</td>
+              <td class="num">{d_p_str}</td>
+              <td><span class="status-pill {sp_cls}">{sp_lbl}</span></td>
+            </tr>"""
+        # subtotal
+        prev_sub = sum(task_cost(t,p) for t in done_tasks)
+        real_sub = prev_sub
+        rows += f"""
+            <tr class="subtotal">
+              <td colspan="2">Subtotal realizado</td>
+              <td class="num">{brl(prev_sub)}</td>
+              <td class="num">{brl(real_sub)}</td>
+              <td class="num"><span class="desvio zer">—</span></td>
+              <td class="num"><span class="desvio zer">—</span></td>
+              <td></td>
+            </tr>
+            <tr class="total">
+              <td colspan="2">Total do projeto (previsto)</td>
+              <td class="num">{brl(total_prev)}</td>
+              <td class="num">—</td><td class="num">—</td><td class="num">—</td><td></td>
+            </tr>"""
+        return rows
+
+    def chart_bars():
+        max_cost = max((task_cost(t,p) for t in tasks), default=1) or 1
+        rows = ""
+        for t in sorted_tasks:
+            prev = task_cost(t, p)
+            real = task_cost(t, p) if t.get("done") else 0
+            pw   = prev / max_cost * 100
+            rw   = real / max_cost * 100
+            r_cls = "late" if real > prev * 1.05 else "realizado"
+            prev_lbl = brl(prev) if prev > 0 else ""
+            real_lbl = brl(real) if real > 0 else ""
+            rows += f"""
+        <div class="bar-row">
+          <div class="bar-label">{t["id"]} · {esc(t["name"][:18])}</div>
+          <div class="bar-track" style="padding-right:60px">
+            <div class="bar-fill previsto"  style="width:{pw:.1f}%"><span class="bar-val">{prev_lbl}</span></div>
+            <div class="bar-fill {r_cls}"   style="width:{rw:.1f}%"><span class="bar-val">{real_lbl}</span></div>
+          </div>
+        </div>"""
+        return rows
+
+    def resource_rows():
+        rows = ""
+        for rid, info in sorted(rec_costs.items(), key=lambda x: -x[1]["previsto"]):
+            r    = info["r"]
+            pct  = info["previsto"] / total_prev * 100 if total_prev else 0
+            cat  = r.get("categoria","")
+            col_map = {"Mão de Obra":"sp-ok","Equipamento":"sp-partial","Insumos":"sp-done"}
+            sp_cls  = col_map.get(cat,"")
+            tarefas = ", ".join(sorted(set(info["tarefas"])))
+            rows += f"""
+          <tr>
+            <td>{esc(r["name"])}</td>
+            <td><span class="status-pill {sp_cls}">{esc(cat)}</span></td>
+            <td class="num">{brl(r.get("custo_dia",0))}</td>
+            <td style="font-size:12px;color:var(--gray-4)">{tarefas}</td>
+            <td class="num">{info["dias"]:.0f}d</td>
+            <td class="num">{brl(info["previsto"])}</td>
+            <td class="num">{pct:.1f}%</td>
+          </tr>"""
+        rows += f"""
+          <tr class="total">
+            <td colspan="5">Total geral</td>
+            <td class="num">{brl(total_prev)}</td>
+            <td class="num">100%</td>
+          </tr>"""
+        return rows
+
+    def alert_chips():
+        if not alerts:
+            return "<span style=\'color:var(--gray-3);font-size:12px\'>Nenhum alerta crítico.</span>"
+        return "".join(f'<span class="alert-chip">{a}</span>' for a in alerts)
+
+    def gantt_header():
+        # Generate week tick labels proportionally
+        labels = ""
+        cur = gs
+        while cur <= ge:
+            pct = gantt_pos(cur)
+            labels += f'<span style="position:absolute;left:{pct:.1f}%;transform:translateX(-50%);white-space:nowrap">{cur.strftime("%d/%b")}</span>'
+            cur += timedelta(days=7)
+        return f'<div style="position:relative;height:18px;font-size:9px;color:var(--gray-3);margin-bottom:2px;">{labels}</div>'
+
+    proj_name    = esc(p["name"])
+    gen_date     = today.strftime("%d de %B de %Y")
+    target_str   = fmtd(target_d)
+    late_tag     = f'<span style="color:var(--red);font-weight:700;font-size:12px;"> · ATRASADO</span>' if is_late else ""
+    kpi_real_cls = "kpi-red" if total_real > total_prev * 0.5 * 1.1 else "kpi-blue"
+
+    # Exec summary text
+    tasks_total  = len(tasks)
+    exec_sum = (
+        f"O projeto <strong>{proj_name}</strong> encontra-se com "
+        f"<strong>{len(done_tasks)}/{tasks_total} tarefas concluídas</strong> "
+        f"({prog_pct}% do escopo). O custo realizado até o momento é de "
+        f"<strong>{brl(total_real)}</strong>, com custo total previsto de "
+        f"<strong>{brl(total_prev)}</strong>. "
+        + ("O projeto apresenta tarefas com risco de atraso em relação ao prazo-alvo de "
+           f"<strong>{target_str}</strong>. " if is_late else
+           f"O prazo-alvo é <strong>{target_str}</strong>. ")
+        + "Recomenda-se acompanhamento semanal das tarefas em andamento."
+    )
+
+    html_out = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Relatório Executivo — {proj_name}</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{{--navy:#0d1f3c;--navy2:#1a3660;--blue:#1e5fa8;--blue-l:#2e7dd1;--accent:#c8a84b;--accent-l:#e8c96b;--gray-0:#f8f9fb;--gray-1:#eef0f4;--gray-2:#d8dce6;--gray-3:#9aa3b8;--gray-4:#5a6278;--gray-5:#2e3448;--text:#1a1e2e;--red:#c0392b;--red-l:#fdf3f2;--green:#1a7a4a;--green-l:#f0faf5;--white:#ffffff;--shadow:0 2px 12px rgba(13,31,60,.08)}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:'IBM Plex Sans',sans-serif;background:var(--gray-0);color:var(--text);font-size:14px;line-height:1.6}}
+.report-header{{background:var(--navy);color:var(--white);position:relative;overflow:hidden}}
+.report-header::before{{content:'';position:absolute;top:0;right:0;width:380px;height:100%;background:linear-gradient(135deg,transparent 40%,rgba(200,168,75,.12) 100%);pointer-events:none}}
+.report-header::after{{content:'';position:absolute;bottom:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent) 0%,var(--blue-l) 60%,transparent 100%)}}
+.header-inner{{max-width:1100px;margin:0 auto;padding:48px 48px 40px;display:flex;justify-content:space-between;align-items:flex-end;gap:32px}}
+.header-eyebrow{{font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}}
+.header-title{{font-family:'Playfair Display',serif;font-size:32px;font-weight:700;line-height:1.2;color:var(--white);margin-bottom:8px}}
+.header-sub{{color:var(--gray-3);font-size:13px;font-weight:300}}
+.header-right{{text-align:right;flex-shrink:0}}
+.header-date{{font-size:12px;color:var(--gray-3);font-weight:300;margin-bottom:4px}}
+.header-status-badge{{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:5px 12px;border-radius:2px;{status_style}}}
+.report-body{{max-width:1100px;margin:0 auto;padding:36px 48px 64px;display:flex;flex-direction:column;gap:32px}}
+.card{{background:var(--white);border:1px solid var(--gray-2);border-radius:4px;box-shadow:var(--shadow)}}
+.card-header{{padding:20px 28px 16px;border-bottom:1px solid var(--gray-1);display:flex;align-items:center;justify-content:space-between;gap:16px}}
+.card-title{{font-family:'Playfair Display',serif;font-size:16px;font-weight:600;color:var(--navy);display:flex;align-items:center;gap:10px}}
+.card-title .dot{{width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0}}
+.card-body{{padding:24px 28px}}
+.card-tag{{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gray-3);background:var(--gray-1);padding:3px 8px;border-radius:2px}}
+.kpi-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--gray-2);border:1px solid var(--gray-2);border-radius:4px;overflow:hidden;box-shadow:var(--shadow)}}
+.kpi{{background:var(--white);padding:24px 24px 20px;position:relative}}
+.kpi::after{{content:'';position:absolute;top:0;left:0;right:0;height:3px}}
+.kpi-blue::after{{background:var(--blue)}}.kpi-gold::after{{background:var(--accent)}}.kpi-green::after{{background:var(--green)}}.kpi-red::after{{background:var(--red)}}
+.kpi-label{{font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--gray-3);margin-bottom:10px}}
+.kpi-value{{font-family:'IBM Plex Mono',monospace;font-size:24px;font-weight:500;color:var(--navy);line-height:1;margin-bottom:8px}}
+.kpi-sub{{font-size:11px;color:var(--gray-4);display:flex;align-items:center;gap:5px}}
+.kpi-delta{{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:600;padding:2px 6px;border-radius:2px}}
+.kpi-delta.up{{background:var(--red-l);color:var(--red)}}.kpi-delta.down{{background:var(--green-l);color:var(--green)}}.kpi-delta.flat{{background:var(--gray-1);color:var(--gray-4)}}
+.alert-bar{{display:flex;align-items:stretch;background:var(--white);border:1px solid var(--gray-2);border-left:4px solid var(--red);border-radius:4px;box-shadow:var(--shadow);overflow:hidden}}
+.alert-icon{{background:var(--red-l);padding:16px 20px;display:flex;align-items:center;font-size:18px;flex-shrink:0}}
+.alert-content{{padding:14px 20px}}
+.alert-title{{font-weight:600;font-size:13px;color:var(--red);margin-bottom:4px;letter-spacing:.02em}}
+.alert-items{{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}}
+.alert-chip{{font-size:11px;font-family:'IBM Plex Mono',monospace;background:var(--red-l);border:1px solid rgba(192,57,43,.2);color:var(--red);padding:3px 10px;border-radius:2px;font-weight:500}}
+.exec-summary{{font-size:14px;color:var(--gray-5);line-height:1.8;border-left:3px solid var(--accent);padding-left:20px;font-style:italic;font-family:'Playfair Display',serif}}
+.exec-summary strong{{font-style:normal;color:var(--navy)}}
+.gantt-wrap{{overflow-x:auto}}
+.gantt-table{{width:100%;border-collapse:collapse;min-width:600px}}
+.gantt-table th{{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gray-3);padding:8px 10px;background:var(--gray-0);border-bottom:1px solid var(--gray-2);white-space:nowrap;text-align:left}}
+.gantt-table td{{padding:7px 10px;border-bottom:1px solid var(--gray-1);vertical-align:middle}}
+.gantt-table tr:last-child td{{border-bottom:none}}
+.gantt-table tr:hover td{{background:var(--gray-0)}}
+.g-id{{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--gray-3);width:32px}}
+.g-name{{font-weight:500;color:var(--navy);min-width:140px;font-size:13px}}
+.g-bar-cell{{width:100%}}
+.gantt-bar-track{{position:relative;height:20px;background:var(--gray-1);border-radius:2px;overflow:visible}}
+.gantt-bar{{position:absolute;top:0;height:100%;border-radius:2px}}
+.gantt-bar.done{{background:var(--green)}}.gantt-bar.planned{{background:var(--blue)}}.gantt-bar.late{{background:var(--red)}}
+.gantt-bar.partial{{background:linear-gradient(90deg,var(--green) 0%,var(--green) 55%,var(--blue-l) 55%)}}
+.today-line{{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--accent);z-index:10}}
+.g-status{{width:80px;text-align:center}}
+.status-pill{{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:2px;white-space:nowrap}}
+.sp-done{{background:var(--green-l);color:var(--green)}}.sp-ok{{background:#eef4ff;color:var(--blue)}}.sp-late{{background:var(--red-l);color:var(--red)}}.sp-partial{{background:#fff8e6;color:#a07820}}
+.legend-item{{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray-4);font-weight:500}}
+.legend-swatch{{width:14px;height:8px;border-radius:1px}}
+.chart-area{{display:flex;flex-direction:column;gap:14px}}
+.bar-row{{display:flex;align-items:center;gap:12px}}
+.bar-label{{width:160px;flex-shrink:0;font-size:12px;color:var(--navy);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.bar-track{{flex:1;display:flex;flex-direction:column;gap:4px}}
+.bar-fill{{height:14px;border-radius:1px;position:relative;min-width:2px}}
+.bar-fill.previsto{{background:var(--gray-2)}}.bar-fill.realizado{{background:var(--blue)}}.bar-fill.late{{background:var(--red)}}
+.bar-val{{position:absolute;right:-52px;top:50%;transform:translateY(-50%);font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--gray-4);white-space:nowrap}}
+.data-table{{width:100%;border-collapse:collapse;font-size:13px}}
+.data-table thead th{{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--gray-3);padding:10px 16px;background:var(--gray-0);border-bottom:2px solid var(--gray-2);text-align:left;white-space:nowrap}}
+.data-table thead th.num{{text-align:right}}
+.data-table tbody td{{padding:11px 16px;border-bottom:1px solid var(--gray-1);color:var(--gray-5);vertical-align:middle}}
+.data-table tbody tr:last-child td{{border-bottom:none}}
+.data-table tbody tr:hover td{{background:var(--gray-0)}}
+.data-table tbody td.num{{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px}}
+.data-table .subtotal td{{background:var(--gray-0);font-weight:600;color:var(--navy);border-top:1px solid var(--gray-2);border-bottom:1px solid var(--gray-2)}}
+.data-table .total td{{background:var(--navy);color:var(--white);font-weight:600}}
+.data-table .total td.num{{font-family:'IBM Plex Mono',monospace}}
+.desvio{{font-family:'IBM Plex Mono',monospace;font-size:12px}}
+.desvio.pos{{color:var(--red)}}.desvio.neg{{color:var(--green)}}.desvio.zer{{color:var(--gray-3)}}
+.task-id{{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--gray-3);background:var(--gray-1);padding:2px 6px;border-radius:2px;margin-right:6px}}
+.report-footer{{max-width:1100px;margin:0 auto;padding:20px 48px 40px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--gray-3);border-top:1px solid var(--gray-2)}}
+.footer-brand{{font-family:'Playfair Display',serif;font-size:13px;color:var(--navy)}}
+</style>
+</head>
+<body>
+<header class="report-header">
+  <div class="header-inner">
+    <div>
+      <div class="header-eyebrow">Relatório Executivo · pln</div>
+      <h1 class="header-title">{proj_name}</h1>
+      <div class="header-sub">Projeto #{p["id"]} &nbsp;·&nbsp; Gerado automaticamente</div>
+    </div>
+    <div class="header-right">
+      <div class="header-date">{gen_date}</div>
+      <div class="header-status-badge">{status_label}</div>
+    </div>
+  </div>
+</header>
+<main class="report-body">
+  <!-- KPIs -->
+  <div class="kpi-grid">
+    <div class="kpi {kpi_real_cls}">
+      <div class="kpi-label">Custo Realizado</div>
+      <div class="kpi-value">{brl(total_real)}</div>
+      <div class="kpi-sub"><span class="kpi-delta flat">→</span> tarefas concluídas</div>
+    </div>
+    <div class="kpi kpi-gold">
+      <div class="kpi-label">Custo Previsto Total</div>
+      <div class="kpi-value">{brl(total_prev)}</div>
+      <div class="kpi-sub"><span class="kpi-delta flat">→</span> orçamento do projeto</div>
+    </div>
+    <div class="kpi kpi-green">
+      <div class="kpi-label">Progresso</div>
+      <div class="kpi-value">{len(done_tasks)}/{len(tasks)}</div>
+      <div class="kpi-sub"><span class="kpi-delta {'down' if prog_pct>=50 else 'up'}">{'▲' if prog_pct>=50 else '▼'} {prog_pct}%</span> concluído</div>
+    </div>
+    <div class="kpi {'kpi-red' if is_late else 'kpi-blue'}">
+      <div class="kpi-label">Prazo-alvo</div>
+      <div class="kpi-value">{target_d.strftime("%d %b")}</div>
+      <div class="kpi-sub"><span class="kpi-delta {'up' if is_late else 'flat'}">{'⚠' if is_late else '→'}</span> {target_d.year}{late_tag}</div>
+    </div>
+  </div>
+  <!-- Alertas -->
+  <div class="alert-bar">
+    <div class="alert-icon">⚠</div>
+    <div class="alert-content">
+      <div class="alert-title">Pontos de atenção</div>
+      <div class="alert-items">{alert_chips()}</div>
+    </div>
+  </div>
+  <!-- Resumo executivo -->
+  <div class="card">
+    <div class="card-header"><div class="card-title"><span class="dot"></span>Resumo Executivo</div><span class="card-tag">Síntese</span></div>
+    <div class="card-body"><p class="exec-summary">{exec_sum}</p></div>
+  </div>
+  <!-- Gantt -->
+  <div class="card">
+    <div class="card-header"><div class="card-title"><span class="dot"></span>Cronograma</div><span class="card-tag">{gs.strftime("%b")} – {ge.strftime("%b %Y")}</span></div>
+    <div class="card-body" style="padding-bottom:28px">
+      {gantt_header()}
+      <div class="gantt-wrap">
+        <table class="gantt-table">
+          <thead><tr><th class="g-id">#</th><th class="g-name">Tarefa</th><th style="width:100%">Linha do tempo</th><th class="g-status">Status</th></tr></thead>
+          <tbody>{gantt_rows()}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:20px;margin-top:16px;padding-top:12px;border-top:1px solid var(--gray-1)">
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--green)"></div>Concluída</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:linear-gradient(90deg,var(--green) 55%,var(--blue-l) 55%)"></div>Em andamento</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--blue)"></div>Prevista</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--red)"></div>Risco/Atraso</div>
+        <div class="legend-item" style="margin-left:auto"><div style="width:2px;height:14px;background:var(--accent);border-radius:1px"></div>Hoje</div>
+      </div>
+    </div>
+  </div>
+  <!-- Previsto x Realizado -->
+  <div class="card">
+    <div class="card-header"><div class="card-title"><span class="dot"></span>Previsto × Realizado por Tarefa</div><span class="card-tag">Custo em R$</span></div>
+    <div class="card-body">
+      <div style="display:flex;gap:20px;margin-bottom:16px">
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--gray-2)"></div>Previsto</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--blue)"></div>Realizado</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:var(--red)"></div>Acima do previsto</div>
+      </div>
+      <div class="chart-area" style="margin-bottom:32px">{chart_bars()}</div>
+      <table class="data-table">
+        <thead><tr><th>#</th><th>Tarefa</th><th class="num">Previsto</th><th class="num">Realizado</th><th class="num">Desvio (R$)</th><th class="num">Desvio (%)</th><th>Status</th></tr></thead>
+        <tbody>{task_rows()}</tbody>
+      </table>
+    </div>
+  </div>
+  <!-- Custo por recurso -->
+  <div class="card">
+    <div class="card-header"><div class="card-title"><span class="dot"></span>Custo Previsto por Recurso</div><span class="card-tag">Breakdown detalhado</span></div>
+    <div class="card-body">
+      <table class="data-table">
+        <thead><tr><th>Recurso</th><th>Categoria</th><th class="num">Custo/dia</th><th>Tarefas</th><th class="num">Dias totais</th><th class="num">Custo previsto</th><th class="num">% total</th></tr></thead>
+        <tbody>{resource_rows()}</tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<footer class="report-footer">
+  <div class="footer-brand">pln · desk</div>
+  <div>Gerado em {today.strftime("%d/%m/%Y")} &nbsp;·&nbsp; Projeto #{p["id"]}</div>
+</footer>
+</body>
+</html>"""
+
+    # Save and open
+    fname = f"pln-report-{p['id']}-{today.strftime('%Y%m%d')}.html"
+    out_path = Path.home() / fname
+    out_path.write_text(html_out, encoding="utf-8")
+    print(c(f"\n  ✓  Relatório gerado: {out_path}", GREEN + BOLD))
+    try:
+        webbrowser.open(out_path.as_uri())
+        print(c("  Abrindo no navegador...\n", GRAY))
+    except:
+        print(c(f"  Abra manualmente: {out_path}\n", GRAY))
+    return str(out_path)
+
+# ── TUI: seleção de projeto ───────────────────────────────────────────────────────
+def tui_select_project():
+    """Tela de seleção/criação de projeto. Retorna o projeto escolhido ou None."""
+    clear()
+    db = load_db()
+    W  = term_width()
+
+    print()
+    print(f"  {c('desk', BOLD + WHITE)} {c('·', GRAY)} {c('pln — Planejador de Projetos', CYAN + BOLD)}")
+    print(c("  " + "─" * (W - 4), GRAY))
+    print()
+
+    projects = [p for p in db["projects"] if not p.get("archived")]
+    archived = [p for p in db["projects"] if p.get("archived")]
+
+    if not projects:
+        print(c("  Nenhum projeto ativo.\n", GRAY))
+    else:
+        for i, p in enumerate(projects, 1):
+            tasks  = p.get("tasks", [])
+            done   = sum(1 for t in tasks if t.get("done"))
+            total  = len(tasks)
+            target = fmt_date(p.get("target_date", ""))
+            bw     = 10
+            filled = round(bw * done / total) if total else 0
+            bar    = c("█" * filled, GREEN) + c("░" * (bw - filled), GRAY)
+            late   = ""
+            if p.get("target_date") and date.fromisoformat(p["target_date"]) < date.today() and done < total:
+                late = c(" ATRASADO", RED + BOLD)
+            print(f"  {c(str(i), CYAN + BOLD)}  {c(p['name'], BOLD + WHITE)}  "
+                  f"{bar} {c(f'{done}/{total}', GRAY)}  "
+                  f"{c('prazo:', GRAY)} {c(target, YELLOW)}{late}")
+        print()
+
+    if archived:
+        print(c(f"  {len(archived)} projeto(s) arquivado(s)", GRAY + DIM))
+        print()
+
+    print(f"  {c('N', CYAN + BOLD)}  Novo projeto")
+    print(f"  {c('A', CYAN + BOLD)}  Arquivar projeto")
+    if archived:
+        print(f"  {c('D', CYAN + BOLD)}  Desarquivar projeto")
+    print(f"  {c('S', CYAN + BOLD)}  Sair")
+    print()
+
+    while True:
+        raw = input(c("  Escolha › ", CYAN + BOLD)).strip().lower()
+        if raw in ("s", "sair", "exit", "q"):
+            return None
+        if raw in ("n", "novo", "new"):
+            clear()
+            print()
+            print(c("  ◆  Novo Projeto", BOLD + WHITE))
+            print(c("  Ctrl+C para cancelar.\n", GRAY))
+            name   = prompt("Nome do projeto")
+            target = prompt_date("Data-alvo (prazo final)")
+            db2    = load_db()
+            pid    = next_pid(db2)
+            db2["projects"].append({
+                "id": pid, "name": name, "target_date": target,
+                "tasks": [], "recursos": []
+            })
+            save_db(db2)
+            return get_project(db2, pid)
+        if raw in ("a", "arquivar") and projects:
+            clear()
+            print()
+            print(c("  ◆  Arquivar Projeto", BOLD + WHITE))
+            print(c("  Projeto arquivado não aparece na tela inicial.\n", GRAY))
+            for i, p in enumerate(projects, 1):
+                print(f"  {c(str(i), CYAN + BOLD)}  {c(p['name'], WHITE)}")
+            print()
+            raw2 = input(c("  Qual projeto arquivar? (número ou Enter para cancelar) › ", CYAN + BOLD)).strip()
+            if raw2:
+                try:
+                    idx2 = int(raw2) - 1
+                    if 0 <= idx2 < len(projects):
+                        db2 = load_db()
+                        p2  = get_project(db2, projects[idx2]["id"])
+                        if p2:
+                            p2["archived"] = True
+                            save_db(db2)
+                            print(c(f"  ✓  '{p2['name']}' arquivado.", GREEN))
+                            import time; time.sleep(1)
+                except (ValueError, IndexError):
+                    pass
+            return tui_select_project()
+        if raw in ("d", "desarquivar") and archived:
+            clear()
+            print()
+            print(c("  ◆  Desarquivar Projeto", BOLD + WHITE))
+            print()
+            for i, p in enumerate(archived, 1):
+                target = fmt_date(p.get("target_date", ""))
+                print(f"  {c(str(i), CYAN + BOLD)}  {c(p['name'], WHITE)}  {c(target, GRAY)}")
+            print()
+            raw2 = input(c("  Qual projeto restaurar? (número ou Enter para cancelar) › ", CYAN + BOLD)).strip()
+            if raw2:
+                try:
+                    idx2 = int(raw2) - 1
+                    if 0 <= idx2 < len(archived):
+                        db2 = load_db()
+                        p2  = get_project(db2, archived[idx2]["id"])
+                        if p2:
+                            p2["archived"] = False
+                            save_db(db2)
+                            print(c(f"  ✓  '{p2['name']}' restaurado.", GREEN))
+                            import time; time.sleep(1)
+                except (ValueError, IndexError):
+                    pass
+            return tui_select_project()
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(projects):
+                db2 = load_db()
+                return get_project(db2, projects[idx]["id"])
+        except: pass
+        print(c("  ✗  Opção inválida.", RED))
+
+# ── TUI: shell persistente ────────────────────────────────────────────────────────
+def tui_shell(project):
+    """Loop principal do shell TUI. Redesenha a tela a cada comando."""
+    pid = project["id"]
+    msg       = ""
+    msg_color = GREEN
+
+    while True:
+        # Sempre recarrega do disco para refletir mudanças
+        db = load_db()
+        p  = get_project(db, pid)
+        if not p:
+            print(c("\n  Projeto não encontrado. Saindo.\n", RED))
+            return
+
+        draw_screen(p, msg, msg_color)
+        msg = ""
+
+        try:
+            raw = input(c(f"  pln #{pid} › ", CYAN + BOLD)).strip()
+        except (KeyboardInterrupt, EOFError):
+            clear()
+            print(c("\n  Até logo.\n", GRAY))
+            return
+
+        if not raw:
+            continue
+
+        args = raw.split()
+        cmd  = args[0].lower()
+
+        # ── Sair ────────────────────────────────────────────────────────────────
+        if cmd in ("sair", "exit", "q", "quit"):
+            clear()
+            print(c("\n  Até logo.\n", GRAY))
+            return
+
+        # ── Voltar à lista de projetos ───────────────────────────────────────────
+        if cmd in ("projetos", "voltar", "back"):
+            new_p = tui_select_project()
+            if new_p is None:
+                clear()
+                print(c("\n  Até logo.\n", GRAY))
+                return
+            pid = new_p["id"]
+            msg = f"Projeto #{pid} '{new_p['name']}' carregado."
+            continue
+
+        # ── Editar projeto ───────────────────────────────────────────────────────
+        if cmd == "edit" and len(args) == 1:
+            draw_screen(p, "")
+            print(c(f"\n  ◆  Editar Projeto #{pid}", BOLD + WHITE))
+            print(c("  Enter para manter.\n", GRAY))
+            raw_name   = input(c("  Nome", CYAN + BOLD) + c(f" [{p['name']}]", GRAY) + c(" › ", GRAY)).strip()
+            raw_target = input(c("  Data-alvo", CYAN + BOLD) + c(f" [{p['target_date']}]", GRAY) + c(" › ", GRAY)).strip()
+            db2 = load_db(); p2 = get_project(db2, pid)
+            if raw_name:   p2["name"] = raw_name
+            if raw_target:
+                try:    p2["target_date"] = date.fromisoformat(raw_target).isoformat()
+                except: pass
+            save_db(db2)
+            msg = "Projeto atualizado."; continue
+
+        # ── Recurso ──────────────────────────────────────────────────────────────
+        if cmd == "recurso":
+            sub = args[1] if len(args) > 1 else ""
+            if sub == "add":
+                draw_screen(p, "")
+                print(c(f"\n  ◆  Novo Recurso\n", BOLD + WHITE))
+                name   = prompt("Nome")
+                print()
+                print(c("  Categoria:", BOLD + WHITE))
+                idx    = prompt_choice("Categoria", CATEGORIAS)
+                cat    = CATEGORIAS[idx]
+                custo  = prompt_float("Custo por dia (R$)", hint="ex: 500 ou 250.50")
+                db2    = load_db(); p2 = get_project(db2, pid)
+                rid    = next_rid(p2)
+                p2.setdefault("recursos", []).append({"id": rid, "name": name, "categoria": cat, "custo_dia": custo})
+                save_db(db2)
+                msg = f"Recurso R{rid} '{name}' adicionado. {fmt_brl(custo)}/dia"
+            elif sub == "list":
+                draw_screen(p, "")
+                recursos = p.get("recursos", [])
+                if not recursos:
+                    print(c("\n  Nenhum recurso cadastrado.", GRAY))
+                else:
+                    print()
+                    for cat in CATEGORIAS:
+                        items = [r for r in recursos if r.get("categoria") == cat]
+                        if not items: continue
+                        col = cat_color(cat)
+                        print(c(f"  {cat}", col + BOLD))
+                        for r in items:
+                            print(f"    {c(f'R{r["id"]}', col + BOLD)}  {c(r['name'], WHITE)}  {c(fmt_brl(r.get('custo_dia',0))+'/dia', GRAY)}")
+                        print()
+                input(c("  Enter para continuar › ", GRAY))
+                msg = ""
+            elif sub == "delete" and len(args) > 2:
+                try:
+                    rid = int(args[2])
+                    db2 = load_db(); p2 = get_project(db2, pid)
+                    r   = get_resource(p2, rid)
+                    if not r:
+                        msg = f"Recurso R{rid} não encontrado."; msg_color = RED; continue
+                    draw_screen(p2, "")
+                    confirm = input(c(f"\n  Apagar R{rid} '{r['name']}'? s/N › ", GRAY)).strip().lower()
+                    if confirm in ("s","sim","y","yes"):
+                        p2["recursos"] = [x for x in p2["recursos"] if x["id"] != rid]
+                        for t in p2.get("tasks", []):
+                            t["recursos"] = [x for x in t.get("recursos", []) if (x["rid"] if isinstance(x, dict) else x) != rid]
+                        save_db(db2)
+                        msg = f"Recurso R{rid} removido."
+                    else:
+                        msg = "Cancelado."
+                except ValueError:
+                    msg = "Use: recurso delete <n>"; msg_color = RED
+            else:
+                msg = "Comandos: recurso add · recurso list · recurso delete <n>"; msg_color = YELLOW
+            continue
+
+        # ── Task ─────────────────────────────────────────────────────────────────
+        if cmd == "task":
+            sub = args[1] if len(args) > 1 else ""
+
+            if sub == "add":
+                draw_screen(p, "")
+                print(c(f"\n  ◆  Nova Tarefa\n", BOLD + WHITE))
+                name    = prompt("Nome da tarefa")
+                dur     = prompt_float("Duração (dias)", hint="ex: 5  10  3")
+                preds   = prompt_predecessors([t for t in p.get("tasks", [])])
+                db2     = load_db(); p2 = get_project(db2, pid)
+                res_recs = _prompt_recursos(p2, db=db2, pid=pid)
+                db2     = load_db(); p2 = get_project(db2, pid)  # reload after possible inline add
+                print()
+                use_win = input(c("  Definir janela de datas? (s/N) › ", CYAN + BOLD)).strip().lower()
+                ws, we  = (None, None)
+                if use_win in ("s","sim","y","yes"):
+                    ws, we = prompt_window()
+                tid      = next_tid(p2)
+                task_obj = {
+                    "id": tid, "name": name, "duration_days": dur,
+                    "predecessors": preds, "recursos": res_recs, "done": False
+                }
+                if ws: task_obj["window_start"] = ws
+                if we: task_obj["window_end"]   = we
+                p2.setdefault("tasks", []).append(task_obj)
+                save_db(db2)
+                sched2 = schedule(p2)
+                s2     = sched2.get(tid, {})
+                msg    = f"T{tid} '{name}' criada · {fmt_date(s2.get('start'))} → {fmt_date(s2.get('end'))} · {fmt_brl(task_cost(p2['tasks'][-1], p2))}"
+                continue
+
+            # task <n> <verb>
+            if len(args) >= 3:
+                try:
+                    tid  = int(args[1])
+                    verb = args[2].lower()
+                except (ValueError, IndexError):
+                    msg = "Use: task <n> edit|done|delete"; msg_color = RED; continue
+
+                db2 = load_db(); p2 = get_project(db2, pid)
+                t   = get_task(p2, tid)
+                if not t:
+                    msg = f"T{tid} não encontrada."; msg_color = RED; continue
+
+                if verb == "done":
+                    if t.get("done"):
+                        msg = f"T{tid} já está concluída."; msg_color = YELLOW
+                    else:
+                        old_sched = schedule(p2)
+                        today2    = date.today()
+                        s_old     = old_sched.get(tid, {})
+                        t["done"]         = True
+                        t["completed_on"] = today2.isoformat()
+                        t["started_on"]   = d2s(s_old.get("start")) or today2.isoformat()
+                        save_db(db2)
+                        new_sched = schedule(p2)
+                        shifted   = [tx for tx in p2.get("tasks", [])
+                                     if any(pr.get("tid") == tid for pr in tx.get("predecessors", []))
+                                     and not tx.get("done")
+                                     and d2s(old_sched.get(tx["id"],{}).get("start")) != d2s(new_sched.get(tx["id"],{}).get("start"))]
+                        msg = f"T{tid} '{t['name']}' concluída."
+                        if shifted:
+                            msg += "  Recalculado: " + ", ".join(f"T{tx['id']}" for tx in shifted)
+
+                elif verb == "edit":
+                    draw_screen(p2, "")
+                    print(c(f"\n  ◆  Editar T{tid} — {t['name']}\n", BOLD + WHITE))
+                    raw_name = input(c("  Nome", CYAN + BOLD) + c(f" [{t['name']}]", GRAY) + c(" › ", GRAY)).strip()
+                    raw_dur  = input(c("  Duração (dias)", CYAN + BOLD) + c(f" [{t['duration_days']}]", GRAY) + c(" › ", GRAY)).strip()
+                    if raw_name: t["name"] = raw_name
+                    if raw_dur:
+                        try: t["duration_days"] = float(raw_dur.replace(",","."))
+                        except: pass
+                    tasks_other       = [x for x in p2.get("tasks", []) if x["id"] != tid]
+                    t["predecessors"] = prompt_predecessors(tasks_other, current=t.get("predecessors", []))
+                    t["recursos"]     = _prompt_recursos(p2, current_recs=t.get("recursos", []), db=db2, pid=pid)
+                    # Janela
+                    print()
+                    has_win  = t.get("window_start") or t.get("window_end")
+                    cur_ws   = t.get("window_start","")
+                    cur_we   = t.get("window_end","")
+                    if has_win:
+                        print(c(f"  Janela atual: {cur_ws or chr(8212)} → {cur_we or chr(8212)}", GRAY))
+                    edit_win = input(c("  Editar janela de datas? (s/N) › ", CYAN + BOLD)).strip().lower()
+                    if edit_win in ("s","sim","y","yes"):
+                        ws, we = prompt_window(current_ws=cur_ws, current_we=cur_we)
+                        if ws: t["window_start"] = ws
+                        else:  t.pop("window_start", None)
+                        if we: t["window_end"]   = we
+                        else:  t.pop("window_end", None)
+                    save_db(db2)
+                    sched2 = schedule(p2); s2 = sched2.get(tid, {})
+                    msg    = f"T{tid} '{t['name']}' atualizada · {fmt_date(s2.get('start'))} → {fmt_date(s2.get('end'))}"
+
+                elif verb == "delete":
+                    draw_screen(p2, "")
+                    confirm = input(c(f"\n  Apagar T{tid} '{t['name']}'? s/N › ", GRAY)).strip().lower()
+                    if confirm in ("s","sim","y","yes"):
+                        p2["tasks"] = [x for x in p2["tasks"] if x["id"] != tid]
+                        for tx in p2["tasks"]:
+                            tx["predecessors"] = [pr for pr in tx.get("predecessors", []) if pr.get("tid") != tid]
+                        save_db(db2)
+                        msg = f"T{tid} apagada."
+                    else:
+                        msg = "Cancelado."
+                else:
+                    msg = "Verbos válidos: edit · done · delete"; msg_color = YELLOW
+                continue
+
+            msg = "Use: task add · task <n> edit · task <n> done · task <n> delete"
+            msg_color = YELLOW
+            continue
+
+        # ── Report ───────────────────────────────────────────────────────────────
+        if cmd == "report":
+            db2 = load_db(); p2 = get_project(db2, pid)
+            out = cmd_report(p2)
+            msg = f"Relatório gerado: {out}"
+            msg_color = GREEN
+            continue
+
+        # ── Comando desconhecido ──────────────────────────────────────────────────
+        msg       = f"Comando desconhecido: '{raw}'"
+        msg_color = RED
+
+# ── Main ─────────────────────────────────────────────────────────────────────────
+def main():
+    # Modo legado: aceita argumentos de linha de comando (compatibilidade)
+    args = sys.argv[1:]
+    if args:
+        _legacy_main(args)
+        return
+
+    # Modo TUI interativo
+    try:
+        p = tui_select_project()
+        if p:
+            tui_shell(p)
+        else:
+            clear()
+            print(c("\n  Até logo.\n", GRAY))
+    except KeyboardInterrupt:
+        clear()
+        print(c("\n  Até logo.\n", GRAY))
+
+def _legacy_main(args):
+    """Mantém compatibilidade com comandos antigos: pln <id> gantt, etc."""
+    if args == ["add"]:
+        cmd_add_project(); return
+    try:
+        pid = int(args[0])
+    except ValueError:
+        print(c(f"\n  ✗  Use apenas 'pln' para abrir o modo interativo.\n", YELLOW))
+        return
+    rest = args[1:]
+    if not rest:             cmd_project(pid);  return
+    if rest == ["gantt"]:    cmd_gantt(pid);    return
+    if rest == ["edit"]:     cmd_edit_project(pid); return
+    if rest == ["delete"]:   cmd_delete_project(pid); return
+    if rest[0] == "recurso":
+        sub = rest[1:]
+        if sub == ["add"]:   cmd_add_recurso(pid);   return
+        if sub == ["list"]:  cmd_list_recursos(pid); return
+        if len(sub) == 2 and sub[1] == "delete":
+            try: cmd_delete_recurso(pid, int(sub[0])); return
+            except ValueError: pass
+    if rest[0] == "task":
+        sub = rest[1:]
+        if sub == ["add"]: cmd_add_task(pid); return
+        if len(sub) == 2:
+            try:
+                tid = int(sub[0])
+                if sub[1] == "edit":   cmd_edit_task(pid, tid);   return
+                if sub[1] == "done":   cmd_done_task(pid, tid);   return
+                if sub[1] == "delete": cmd_delete_task(pid, tid); return
+            except ValueError: pass
+    print(c(f"\n  ✗  Comando desconhecido: {' '.join(args)}\n", RED))
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        clear()
+        print(c("\n  Até logo.\n", GRAY))

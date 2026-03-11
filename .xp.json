@@ -1,0 +1,850 @@
+{
+  "industries": [
+    {
+      "id": 1,
+      "name": "Semiconductor manufacturing"
+    },
+    {
+      "id": 2,
+      "name": "Pharmaceutical Manufacturing"
+    },
+    {
+      "id": 3,
+      "name": "Software"
+    },
+    {
+      "id": 4,
+      "name": "Wine and Spirits"
+    },
+    {
+      "id": 5,
+      "name": "Retail"
+    },
+    {
+      "id": 6,
+      "name": "Home Appliance Manufacturer and Maker"
+    },
+    {
+      "id": 7,
+      "name": "High Tech"
+    },
+    {
+      "id": 8,
+      "name": "Food Company"
+    },
+    {
+      "id": 9,
+      "name": "Agricultural"
+    },
+    {
+      "id": 10,
+      "name": "Consumer Electronics"
+    },
+    {
+      "id": 11,
+      "name": "Construction"
+    }
+  ],
+  "functionals": [
+    {
+      "id": 1,
+      "name": "Software Engineering and Development"
+    },
+    {
+      "id": 2,
+      "name": "Cost Optimization"
+    },
+    {
+      "id": 3,
+      "name": "Custome Lifetime Value"
+    },
+    {
+      "id": 4,
+      "name": "Wine and Spirits"
+    },
+    {
+      "id": 5,
+      "name": "Capacity Planning"
+    },
+    {
+      "id": 6,
+      "name": "Retail"
+    },
+    {
+      "id": 7,
+      "name": "Inventory Optimization"
+    },
+    {
+      "id": 8,
+      "name": "Assortment Optimization"
+    },
+    {
+      "id": 9,
+      "name": "Demand Planning"
+    },
+    {
+      "id": 10,
+      "name": "IBP/S&OP"
+    },
+    {
+      "id": 11,
+      "name": "Staffing Optimization"
+    },
+    {
+      "id": 12,
+      "name": "Biomass"
+    },
+    {
+      "id": 13,
+      "name": "Renewable Energy"
+    },
+    {
+      "id": 14,
+      "name": "Supply Chain Design & Build"
+    },
+    {
+      "id": 15,
+      "name": "Supply Execution"
+    }
+  ],
+  "projects": [
+    {
+      "id": 1,
+      "created_on": "2026-03-07",
+      "name": "Configure to Order",
+      "client": "Intel Corporation",
+      "employer": "End-To-End Analytics",
+      "month": 1,
+      "year": 2016,
+      "functionals": [
+        "Software Engineering and Development"
+      ],
+      "industry": "Semiconductor manufacturing",
+      "techs": [
+        "MS Access",
+        "VBA",
+        "Excel"
+      ],
+      "problem": "Intel Corporation's configure-to-order business relied on critical operational data \u2014 including parts inventories and demand signals \u2014 that was fragmented across multiple disparate systems within the organization. The lack of a unified data foundation created inefficiencies and unreliable outputs, as information could not be easily reconciled or trusted at scale.",
+      "solution": "To solve this, we developed a data consolidation tool that aggregated inputs from across these systems, normalized them to a common identifier framework, and structured the output into a centralized, relational database \u2014 providing a single, reliable source of truth to support Intel's configure-to-order operations.",
+      "results": "Tool was developed and used for years",
+      "notes": "",
+      "updated_on": "2026-03-09",
+      "role": "Consultant, Developer",
+      "skills": [
+        "MS Access",
+        "VBA",
+        "Excel",
+        "SQL",
+        "ETL / Data Integration"
+      ],
+      "lessons": ""
+    },
+    {
+      "id": 2,
+      "created_on": "2026-03-07",
+      "name": "Cost To Serve",
+      "client": "Dexa Group (Indonesia)",
+      "employer": "End-To-End Analytics",
+      "month": 5,
+      "year": 2019,
+      "functionals": [
+        "Cost Optimization"
+      ],
+      "industry": "Pharmaceutical Manufacturing",
+      "techs": [
+        "Python : Pandas",
+        "R",
+        "R data.table",
+        "Power BI"
+      ],
+      "problem": "Dexa operates a broad and complex product portfolio distributed across a large number of venues throughout Asia. The variability across this network is significant \u2014 production methods, transportation routes, storage requirements, and packaging specifications differ considerably from product to product and venue to venue. This complexity made it difficult to understand the true profitability of any given product-venue combination.",
+      "solution": "To address this, we developed a dashboard to calculate and surface the cost to serve \u2014 defined as the total end-to-end cost of delivering a product to a specific customer or venue, encompassing production, packaging, storage, and transportation expenses. By making these costs visible and comparable across the portfolio, the dashboard enables leadership to identify margin leakage, prioritize profitable channels, and make informed decisions about pricing and resource allocation.",
+      "results": "",
+      "notes": "",
+      "role": "Consultant, Delivery",
+      "skills": [
+        "Python : Pandas",
+        "SQL",
+        "R",
+        "Power BI",
+        "R data.table",
+        "Project Management",
+        "Cost Analysis",
+        "Data Visualization"
+      ],
+      "lessons": "",
+      "updated_on": "2026-03-07"
+    },
+    {
+      "id": 3,
+      "created_on": "2026-03-07",
+      "name": "Customer Lifetime Value",
+      "client": "Splunk Inc",
+      "employer": "End-To-End Analytics",
+      "month": 7,
+      "year": 2019,
+      "functionals": [
+        "Custome Lifetime Value"
+      ],
+      "industry": "Software",
+      "techs": [
+        "Python : Pandas",
+        "Python",
+        "DAX"
+      ],
+      "skills": [
+        "Python : Pandas",
+        "Python",
+        "DAX",
+        "Power BI",
+        "Project Management",
+        "Churn Analysis",
+        "Revenue Modeling",
+        "Data Visualization"
+      ],
+      "problem": "Throughout its history, Splunk offered its software under three distinct licensing models \u2014 perpetual, term, and SaaS/Cloud. As the company evolved and its customer base grew increasingly diverse, understanding how these models performed across different client segments became critical. The interaction between licensing model, customer segment, and churn rate was complex and poorly understood, making it difficult to anticipate revenue progression or identify retention risks.",
+      "solution": "We conducted a comprehensive analysis of how Splunk's three licensing models interacted with client segmentation and churn rate dynamics. The findings were surfaced through a dedicated dashboard that allowed stakeholders to visualize these relationships and track expected revenue progression across segments \u2014 enabling leadership to make more informed decisions around licensing strategy, customer retention, and long-term growth planning.",
+      "results": "",
+      "notes": "",
+      "updated_on": "2026-03-07"
+    },
+    {
+      "id": 4,
+      "created_on": "2026-03-07",
+      "name": "Rough Cut Capacity",
+      "client": "Gallo de Sonoma",
+      "employer": "End-To-End Analytics",
+      "month": 3,
+      "year": 2017,
+      "functionals": [
+        "Capacity Planning"
+      ],
+      "industry": "Wine and Spirits",
+      "techs": [
+        "Python",
+        "Anaplan"
+      ],
+      "problem": "Gallo de Sonoma, the largest winery in the world, manages a highly complex supply chain \u2014 producing its own grapes while also sourcing from growers across the globe. Cooperage capacity (the availability of barrels and tanks used for fermentation and aging) is inherently constrained, and the complexity of blending across varietals and origins makes capacity consumption difficult to predict with confidence. The interplay of harvest volumes, inter-facility transfers, and inbound supply variability created significant planning risk, leaving the organization without a reliable way to anticipate capacity shortfalls or surpluses across the production year.",
+      "solution": "We developed a planning tool in Anaplan that consolidated all key supply signals \u2014 including harvest forecasts, transfers, and inbound grape supply \u2014 into a unified model capable of producing a comprehensive cooperage capacity calculation for the full year. The tool's what-if scenario functionality allowed planning teams to stress-test assumptions, assess capacity risks under different conditions, and make proactive decisions to mitigate potential bottlenecks before they materialized.",
+      "results": "",
+      "notes": "",
+      "updated_on": "2026-03-07",
+      "role": "Consultant",
+      "skills": [
+        "Python",
+        "Anaplan",
+        "Project Management",
+        "Agile Methodology",
+        "What-if Scenario Analysis",
+        "Capacity Planning"
+      ],
+      "lessons": "Client-side manager was very proud of his track record of delivering projects on time. Team had to make an effort to match numbers produced bu the tool with baseline numbers."
+    },
+    {
+      "id": 5,
+      "created_on": "2026-03-07",
+      "name": "Supply Chain Diagnostic & Optimization \u2014 Americanas (LASA)",
+      "client": "Lojas Americanas SA - LASA",
+      "employer": "Accenture",
+      "role": "Manager",
+      "month": 5,
+      "year": 2021,
+      "functionals": [
+        "Inventory Optimization",
+        "Assortment Optimization"
+      ],
+      "industry": "Retail",
+      "techs": [
+        "Python : Pandas",
+        "Python : Numpy",
+        "VBA",
+        "Excel"
+      ],
+      "skills": [
+        "Python : Pandas",
+        "Python : Numpy",
+        "VBA",
+        "Excel",
+        "SQL",
+        "Project Management",
+        "Supply Chain Diagnostics",
+        "Workshop Facilitation",
+        "Statistical Simulation"
+      ],
+      "problem": " Americanas (LASA) faced significant inefficiencies in its supply and inventory planning processes across its retail store network. Key pain points included stockouts (ruptura), excess\n  inventory, poor demand planning accuracy, lack of standardization in replenishment processes, and insufficient use of statistical tools and automation. These issues resulted in lost sales,\n   high inventory costs, and reduced chain profitability.",
+      "solution": " Accenture conducted a 6-week supply chain diagnostic engagement combining qualitative mapping (interviews with 24 stakeholder groups across commercial, logistics, supply, and operations\n  functions) with quantitative analysis (statistical simulations of demand planning, inventory coverage, and stockout scenarios). The output was a prioritized opportunity map with macro\n  benefit estimates, a scenario simulation tool, and an implementation roadmap with quick-win initiatives and agile implementation waves \u2014 enabling LASA to become more efficient and reduce\n  supply chain costs.",
+      "results": "",
+      "notes": "",
+      "updated_on": "2026-03-07"
+    },
+    {
+      "id": 6,
+      "created_on": "2026-03-07",
+      "name": "Demand Planning - Finished Goods",
+      "client": "Whirlpool",
+      "employer": "Accenture Brazil",
+      "role": "Manager, Developer",
+      "month": 5,
+      "year": 2020,
+      "functionals": [
+        "Demand Planning"
+      ],
+      "industry": "Home Appliance Manufacturer and Maker",
+      "skills": [
+        "Python : Pandas",
+        "Python : Numpy",
+        "VBA",
+        "Excel",
+        "SQL",
+        "DAX",
+        "Project Management",
+        "Statistical Modeling",
+        "Time Series Forecasting",
+        "Econometric Modeling",
+        "Demand Sensing",
+        "S&OP",
+        "Data Visualization",
+        "Power Query"
+      ],
+      "problem": "Whirlpool Brazil was operating with a demand forecast accuracy (WMAPE) of approximately 22\u201324% for constrained demand and around 36% for unconstrained demand \u2014 a significant gap that         impacted inventory balancing, conversion costs, and service levels. The existing planning process relied on three manual macro-stages: market analysis and sell-out data, transformation   from sell-out to sell-in, and a consensus cycle. Previous attempts to automate planning using systems like SAP APO had become obsolete due to the fast-changing nature of the business.   Furthermore, strategic initiatives \u2014 including D2C channel growth, a transition to weekly planning, and new distribution center openings \u2014 were expected to put even more pressure on these   indicators.",
+      "solution": " Accenture conducted a 5-week Proof of Concept (PoC) across three product categories (Stoves \u2013 38 models, Microwaves \u2013 14 models, and Dishwashers \u2013 8 models), representing ~25% of total   volume. Over 10,200 combinations of SKUs and statistical models were configured to forecast Q4/2020 and Q1/2021 sales volumes following the current robust S&OP cycle. In addition to   conventional time-series models (Exponential Smoothing, ARIMA, Croston), the PoC tested the enrichment of forecasts with external variables such as the Consumer Confidence Index,   Industrial Production Index, Emergency Aid (Aux\u00edlio Emergencial), Sell-Out data, and commercial event calendars. A next-generation econometric model was also explored to assess the   potential of incorporating structural demand drivers.",
+      "results": "  The PoC delivered a +13.5 percentage point improvement in forecast accuracy (backtesting from Oct/2020 to Feb/2021), with 90% of analyzed products showing accuracy gains. The overall WMAPE    dropped from ~36% (baseline) to ~22% (PoC), representing a 32% relative reduction in forecast error. All three categories showed improvement, with Stoves achieving the highest gain   (~16pp). External variables contributed meaningfully: Sell-Out data improved models in 38% of cases, the Consumer Confidence Index in 8 models, Industrial Production Index in 7, and   Emergency Aid in 5. These results validated the business case for a full-scale Demand Planning service implementation, with a recommended roadmap including near-term quick wins via   automation/expansion of the PoC and a structural evolution toward next-generation econometric modeling.",
+      "lessons": "",
+      "updated_on": "2026-03-09"
+    },
+    {
+      "id": 7,
+      "created_on": "2026-03-07",
+      "name": "Mobile Chip IBP",
+      "client": "Intel Corporation",
+      "employer": "End-To-End Analytics",
+      "role": "Consultant, Developer",
+      "month": 7,
+      "year": 2016,
+      "functionals": [
+        "IBP/S&OP"
+      ],
+      "industry": "Semiconductor manufacturing",
+      "skills": [
+        "VBA",
+        "Excel",
+        "SQL",
+        "DAX",
+        "Python",
+        "Scenario Planning",
+        "Financial Modeling",
+        "S&OP",
+        "Capacity Planning",
+        "Executive Communication"
+      ],
+      "problem": "Intel's mobile chip manufacturing division operated in a highly volatile demand environment, where individual customer deals with major mobile device manufacturers carried significant        volume implications \u2014 making the outcome of a single negotiation capable of materially shifting the company's revenue outlook. With constrained fabrication capacity and long production   lead times inherent to semiconductor manufacturing, the business faced a dual-sided risk: market risk from lost sales in the event of under-commitment, where insufficient supply allocation    could result in missed revenue and ceded market share to competitors, and inventory risk from excess stock in the event of over-commitment, where unsold wafers and finished chips would   translate into significant working capital exposure and potential write-offs. Within the Integrated Business Planning (IBP) process, these tensions were particularly acute, as planning   teams were expected to arrive at monthly IBP reviews with well-supported scenarios and clear recommendations \u2014 yet lacked the analytical infrastructure to rapidly model how shifts in   demand or supply would cascade across the value chain and into financial outcomes.",
+      "solution": "To address this challenge, a dynamic scenario planning tool was developed specifically to support Intel's IBP process and monthly planning meetings. The tool automated all end-to-end   supply chain calculations \u2014 from raw wafer starts through fabrication yields to final chip output \u2014 translating volume assumptions directly into financial figures, including revenue, cost   of goods, and inventory exposure. By enabling side-by-side comparison of multiple demand and supply scenarios in real time \u2014 such as winning or losing a major OEM deal, or operating under   different capacity constraints \u2014 the tool gave commercial and supply chain teams the ability to walk into IBP sessions fully prepared, with quantified trade-offs and clear decision   support. This transformed IBP meetings from data-gathering exercises into strategic conversations, allowing leadership to make faster, more confident decisions on capacity allocation,   customer commitments, and risk management across the semiconductor value chain.",
+      "results": "IBP sessions shifted from data-gathering exercises to strategic decision meetings, with immediate and quantified business outcomes. The tool delivered risk-informed inventory targets, a significant reduction in the number of meetings required to complete scenario analysis, and faster, higher-quality decisions on capacity allocation and customer commitments across the semiconductor value chain.",
+      "lessons": "",
+      "updated_on": "2026-03-09"
+    },
+    {
+      "id": 8,
+      "created_on": "2026-03-07",
+      "updated_on": "2026-03-09",
+      "name": "Forecast Accuracy Analysis",
+      "client": "Bimbo Foods",
+      "employer": "End-To-End Analytics",
+      "role": "Consultant, Lead Developer",
+      "month": 8,
+      "year": 2018,
+      "functionals": [
+        "Demand Planning"
+      ],
+      "industry": "Food Company",
+      "skills": [
+        "Power BI",
+        "DAX",
+        "Power Query",
+        "VBA",
+        "Excel",
+        "Statistical Modeling",
+        "Time Series Forecasting",
+        "Data Visualization",
+        "Project Management"
+      ],
+      "problem": "Bimbo Foods had implemented a statistical demand forecasting engine to automate predictions across hundreds of product-channel combinations. However, demand planners were routinely applying manual overrides to the system's outputs \u2014 with no analytical framework to assess whether those overrides were actually improving accuracy or degrading it. Leadership had no visibility into which overrides added value, which were harmful, and how to prioritize planner attention across a complex portfolio spanning multiple channels (Walmart, Target, Sam's Club, Food Service) and geographies. The sheer volume of APG-PPG combinations made manual evaluation impossible.",
+      "solution": "As lead developer, I designed and delivered a multi-layer Forecast Accuracy Analysis platform in Power BI. The tool measured three levels of accuracy \u2014 statistical baseline (predictive), manual override, and final forecast \u2014 using MAPE and bias metrics across weekly, period, and annual horizons. I built a 2x2 prioritization matrix combining override improvement percentage with volume weight, allowing planners and leadership to instantly categorize overrides as high-value, harmful, or inconsequential. The data model integrated actuals (LE), forecasts (FCST), and master data across APG and PPG hierarchies via Power Query transformations and DAX measures. I also built VBA bridges connecting Excel to the underlying Analysis Services model for automated master table refresh, and produced full user and developer documentation including 9 video training modules.",
+      "results": "The tool gave Bimbo Foods its first quantified view of forecast override value across the entire planning organization. Analysis revealed that only 7% of APG-PPG combinations met the criteria for high-value, high-impact overrides \u2014 surfacing a significant opportunity to redirect planner effort and improve overall forecast quality. The platform was adopted across multiple business units and channels, with a scalable architecture supporting regional variations and hierarchical drill-down from business unit to individual product-channel level.",
+      "lessons": ""
+    },
+    {
+      "id": 9,
+      "created_on": "2026-03-07",
+      "name": "Staffing Optimization",
+      "client": "Ri Happy",
+      "employer": "End-To-End Analytics",
+      "role": "Cosultant, Project Manager",
+      "month": 11,
+      "year": 2016,
+      "functionals": [
+        "Staffing Optimization"
+      ],
+      "industry": "Retail",
+      "skills": [
+        "R",
+        "ggplot2",
+        "Project Management",
+        "R data.table",
+        "MS Access",
+        "VBA",
+        "Excel",
+        "SQL",
+        "Mathematical Optimization",
+        "Linear Programming",
+        "Gurobi"
+      ],
+      "problem": "A 200-store national toy retailer (Ri-Happy) faced highly variable customer foot traffic throughout the week and day, resulting in costly idle staff during slow periods and manpower   shortages with lost sales during peaks. The situation was further complicated by approximately 1,400 operators spread across 214 stores, governed by 66 different union agreements and new   labor laws \u2014 making it nearly impossible to allocate staff correctly using manual or simplistic rules.",
+      "solution": " End-to-End Analytics built a suite of three integrated optimization tools: a Simulator Tool that modeled hourly demand from historical ticket data and optimized staffing against 40+   configurable business variables (overtime rules, break requirements, daily/weekly hour limits, etc.) using a mathematical (LP) solver such as Gurobi; a Scenario Management Tool that   allowed comparison of different staffing configurations; and a Schedule Generating Tool that produced the final, legally-compliant shift schedule for each store individually, accounting   for working days, start/end times, breaks, holidays, and all applicable state regulations.",
+      "results": " The solution brought full visibility into overstaffing and understaffing patterns across the store network, which had previously been invisible. Headcount was reduced by 23%, overall   staffing costs were reduced by 10%, legal risk was significantly mitigated by systematically encoding all regulatory constraints into the model, and the quality and speed of staffing   decisions improved substantially through the creation of the three integrated tools.",
+      "lessons": ""
+    },
+    {
+      "id": 10,
+      "created_on": "2026-03-09",
+      "name": "Biomass & Renewable Energy Venture",
+      "client": "Jatoba Group",
+      "employer": "Jatoba Group",
+      "role": "Founding Partner",
+      "month": 4,
+      "year": 2024,
+      "functionals": [
+        "Biomass",
+        "Renewable Energy"
+      ],
+      "industry": "Agricultural",
+      "skills": [
+        "Python",
+        "Geographic Information System",
+        "Automated Drone Mapping",
+        "Geospatial Analysis",
+        "Yield Forecasting",
+        "Inventory Management",
+        "CAPEX/OPEX Optimization",
+        "Debt Financing Strategy",
+        "Capital Structure Analysis",
+        "Supply Chain Optimization",
+        "Carbon Credit Strategy",
+        "Financial Modeling",
+        "ESG / Sustainability",
+        "Agroforestry",
+        "Land Use Planning"
+      ],
+      "problem": "Founded a biomass production and renewable energy venture across 2,000 acres in Brazil, managing complex multi-product operations \u2014 eucalyptus biomass for energy generation, integrated cattle operations, and agroforestry systems for carbon credit generation. Competing production cycles (7-year eucalyptus, seasonal cattle), resource allocation constraints across land use types, and energy market dynamics created significant planning and operational complexity with no analytical framework to optimize across them simultaneously.",
+      "solution": "Developed and implemented forecasting models and resource allocation strategies to optimize production across eucalyptus (7-year cycle), cattle (seasonal cycles), and agroforestry systems. Applied GIS software, Python, and automated drone mapping for land use planning, yield forecasting, and operational efficiency. Integrated geospatial analysis with Python-based analytics to enable data-driven decisions on planting schedules, inventory management, and energy yield optimization. Conducted comprehensive financial analysis to optimize capital structure and debt financing strategies, developing CAPEX and OPEX optimization models to balance investment timing and debt service obligations across multi-year production cycles. Led development of a voluntary carbon credit generation strategy, including measurement and verification protocols for biomass carbon sequestration.",
+      "results": "Successfully scaled the venture across 2,000 acres, integrating eucalyptus biomass, cattle operations, and agroforestry into a diversified renewable energy and carbon credit platform. Advanced analytics and supply chain optimization methodologies enabled effective navigation of competing production cycles, resource allocation constraints, and energy market dynamics. Demonstrated practical expertise in emerging ESG and renewable energy markets through the development and execution of a carbon credit generation strategy.",
+      "lessons": "",
+      "updated_on": "2026-03-09"
+    },
+    {
+      "id": 11,
+      "created_on": "2026-03-09",
+      "updated_on": "2026-03-09",
+      "name": "End-to-End Supply Chain Build \u2014 Novavax",
+      "client": "Novavax",
+      "employer": "Accenture",
+      "role": "Technical Lead",
+      "month": 1,
+      "year": 2021,
+      "industry": "Pharmaceutical Manufacturing",
+      "functionals": [
+        "Supply Chain Design & Build",
+        "Supply Execution",
+        "IBP/S&OP",
+        "Capacity Planning",
+        "Demand Planning",
+        "Inventory Optimization"
+      ],
+      "skills": [
+        "Technical Leadership",
+        "Solution Architecture",
+        "Supply Chain Design",
+        "Relational Database Design",
+        "SQL Server",
+        "BOM Analysis",
+        "Critical Materials Management",
+        "Python",
+        "Python : Pandas",
+        "Django",
+        "SQL",
+        "VBA",
+        "Excel",
+        "C#",
+        ".NET / Entity Framework",
+        "JavaScript",
+        "Node.js",
+        "Data Governance",
+        "Stakeholder Management",
+        "Technology Strategy",
+        "Project Management",
+        "Agile Methodology",
+        "S&OP",
+        "Capacity Planning",
+        "Executive Communication"
+      ],
+      "problem": "Novavax developed NVX-CoV2373 (Nuvaxovid), a protein-based COVID-19 vaccine backed by $1.6 billion in U.S. government funding through Operation Warp Speed and $399 million from CEPI \u2014 yet the company had no supply chain infrastructure capable of supporting commercial-scale manufacturing and global distribution. Unlike large pharmaceutical incumbents, Novavax was a small biotech transitioning overnight into a multi-country vaccine manufacturer, with approvals being granted in the EU (December 2021), Canada (February 2022), the UK, and distribution partnerships spanning the Serum Institute of India (for COVAX and global markets) and Takeda (Japan). With production split across Drug Substance (DS), Drug Product (DP), and Final Packaging (FP) stages \u2014 and cold-chain logistics at 2\u20138\u00b0C adding further operational complexity \u2014 the company urgently needed end-to-end planning processes, data systems, and execution tools that simply did not exist.",
+      "solution": "As Technical Lead within the Accenture engagement, I co-designed and delivered Novavax's supply chain planning capability from the ground up during one of the most time-critical periods in the company's history. I structured planning processes across three horizons \u2014 short-term weekly execution, mid-term monthly planning, and long-term capacity planning \u2014 covering each manufacturing stage (DS, DP, FP) and their interdependencies. I led the data modelling effort, designing the relational database schema to represent Bills of Materials, SKU genealogy, batch relationships, inventory positions, and multi-site material flows \u2014 including the Matrix-M adjuvant platform central to Novavax's broader pipeline. I conducted critical materials and BOM analysis to surface supply constraints, and built supply vs. demand balancing and capacity models to support S&OP decisions as production targets shifted with each new market approval. On the delivery side, I led development of a macro-enabled Excel supply execution workbook for day-to-day planners, a Python/Django integrated planning application covering demand, supply, BOM, and network modules, and a normalized SQL Server data repository replacing a fragile landscape of 25+ disconnected spreadsheets. I also drove the technology strategy decision, recommending the Python-based architecture for its scalability and AI/ML extensibility.",
+      "results": "Novavax built a functional, scalable supply chain planning operation during the peak of the COVID-19 vaccine rollout \u2014 supporting market launches across the EU, Canada, the UK, and distribution through COVAX and manufacturing partners. The platform replaced manual, error-prone spreadsheets with a governed relational database featuring validation, audit trails, and concurrent multi-user access. Critical materials and BOM analysis gave leadership real supply risk visibility for the first time, while capacity and supply vs. demand models enabled proactive decisions across all planning horizons. Supply execution tools were adopted by planners across DS, DP, and FP, reducing manual effort and positioning the company to scale rapidly as the product portfolio expanded to Flu and Bi-valent variants. The data architecture built during this engagement \u2014 including SKU genealogy and BOM foundations \u2014 also supported Novavax's strategic pivot toward combination vaccines and the $1.2 billion Sanofi partnership around its Matrix-M adjuvant platform.",
+      "lessons": ""
+    },
+    {
+      "id": 12,
+      "created_on": "2026-03-09",
+      "updated_on": "2026-03-09",
+      "name": "Forecasting & S&OP Implementation",
+      "client": "FitBit",
+      "employer": "End-To-End Analytics",
+      "role": "Consultant, Lead Developer",
+      "month": 6,
+      "year": 2018,
+      "industry": "Consumer Electronics",
+      "functionals": [
+        "Demand Planning",
+        "IBP/S&OP"
+      ],
+      "skills": [
+        "Statistical Modeling",
+        "Machine Learning",
+        "Time Series Forecasting",
+        "S&OP",
+        "CPFR",
+        "Data Visualization",
+        "Project Management"
+      ],
+      "problem": "A consumer electronics firm (wearables) was operating with forecast accuracy of ~50% MAPE at the product family level, with a significant positive bias \u2014 leading to excess inventory at retail partners, costly stock balancing operations, and price discounting. The company lacked a structured forecasting process and had no single source of truth for forecast generation, data management, or S&OP reporting.",
+      "solution": "I designed and implemented a forecast management system and weekly S&OP process incorporating statistical and machine learning methods to systematically reduce forecast error. The solution produced baseline forecasts at the Customer-SKU-Week level across the entire product portfolio, establishing a consensus forecasting interface to align stakeholders. Repeatable reporting was built to consistently communicate the state of the business across planning and commercial teams, and the system was positioned to incorporate CPFR into the weekly cycle.",
+      "results": "Overall MAPE improved from ~50% (positively biased at product family level) to ~27% at the Customer-SKU level while achieving net neutral bias \u2014 a reduction of nearly 50% in forecast error. The company gained a single source of truth for forecasting and planning, with a repeatable S&OP cadence and the infrastructure to bring retail partners into a collaborative forecasting process (CPFR).",
+      "lessons": ""
+    },
+    {
+      "id": 14,
+      "created_on": "2026-03-09",
+      "updated_on": "2026-03-09",
+      "name": "Capacity Planning \u2014 Modular Construction",
+      "client": "Katerra",
+      "employer": "End-To-End Analytics",
+      "role": "Consultant, Lead Developer",
+      "month": 7,
+      "year": 2018,
+      "industry": "Construction",
+      "functionals": [
+        "Capacity Planning",
+        "Supply Chain Design & Build"
+      ],
+      "skills": [
+        "Python",
+        "SQL",
+        "SmartSheet",
+        "Relational Database Design",
+        "Capacity Planning",
+        "What-if Scenario Analysis",
+        "Scenario Planning",
+        "Project Management"
+      ],
+      "problem": "Katerra, a modular construction startup that had grown from inception to $1.3 billion in bookings in under three years, was approaching construction like a factory \u2014 but its forecasting and production planning systems had not kept pace with the company's growth. Demand forecasting (managed in SmartSheet) and capacity planning were disconnected, making it impossible to efficiently translate project bookings into production plans or identify capacity shortfalls across plants, lines, and project types.",
+      "solution": "I designed and delivered a client-server capacity planning tool with a centralized database consolidating all demand and capacity information across multiple users and access levels. The tool automated integration with Katerra's online forecasting system (SmartSheet), translating incoming forecasts directly into demand signals for production planning. It allowed planners to define capacity elements, project types, durations, and shifts \u2014 and to model new plants, lines, calendar breaks, and production ramps. What-if scenario capabilities enabled rapid identification of capacity shortfalls and surplus ahead of commitment.",
+      "results": "The solution significantly reduced the time required to translate a project forecast into a production plan, improved cross-team integration through the centralized database, and enabled strategic and tactical capacity discussions that were previously impossible. Scenario planning gave leadership the ability to stress-test growth assumptions and align supply capacity to bookings pipeline.",
+      "lessons": ""
+    }
+  ],
+  "skills": [
+    {
+      "id": 1,
+      "name": "Python : Pandas"
+    },
+    {
+      "id": 2,
+      "name": "Python : Numpy"
+    },
+    {
+      "id": 3,
+      "name": "MS Access"
+    },
+    {
+      "id": 4,
+      "name": "VBA"
+    },
+    {
+      "id": 5,
+      "name": "Excel"
+    },
+    {
+      "id": 6,
+      "name": "R"
+    },
+    {
+      "id": 7,
+      "name": "Power BI"
+    },
+    {
+      "id": 8,
+      "name": "SQL"
+    },
+    {
+      "id": 9,
+      "name": "R data.table"
+    },
+    {
+      "id": 10,
+      "name": "Python"
+    },
+    {
+      "id": 11,
+      "name": "DAX"
+    },
+    {
+      "id": 12,
+      "name": "Anaplan"
+    },
+    {
+      "id": 13,
+      "name": "Project Management"
+    },
+    {
+      "id": 14,
+      "name": "Agile Methodology"
+    },
+    {
+      "id": 15,
+      "name": "ggplot2"
+    },
+    {
+      "id": 16,
+      "name": "Geographic Information System"
+    },
+    {
+      "id": 17,
+      "name": "Automated Drone Mapping"
+    },
+    {
+      "id": 18,
+      "name": "Geospatial Analysis"
+    },
+    {
+      "id": 19,
+      "name": "Yield Forecasting"
+    },
+    {
+      "id": 20,
+      "name": "Inventory Management"
+    },
+    {
+      "id": 21,
+      "name": "CAPEX/OPEX Optimization"
+    },
+    {
+      "id": 22,
+      "name": "Debt Financing Strategy"
+    },
+    {
+      "id": 23,
+      "name": "Capital Structure Analysis"
+    },
+    {
+      "id": 24,
+      "name": "Supply Chain Optimization"
+    },
+    {
+      "id": 25,
+      "name": "Carbon Credit Strategy"
+    },
+    {
+      "id": 26,
+      "name": "Statistical Modeling"
+    },
+    {
+      "id": 27,
+      "name": "Scenario Planning"
+    },
+    {
+      "id": 28,
+      "name": "Mathematical Optimization"
+    },
+    {
+      "id": 29,
+      "name": "SQL Server"
+    },
+    {
+      "id": 30,
+      "name": "Django"
+    },
+    {
+      "id": 31,
+      "name": "C#"
+    },
+    {
+      "id": 32,
+      "name": ".NET / Entity Framework"
+    },
+    {
+      "id": 33,
+      "name": "JavaScript"
+    },
+    {
+      "id": 34,
+      "name": "Node.js"
+    },
+    {
+      "id": 35,
+      "name": "Relational Database Design"
+    },
+    {
+      "id": 36,
+      "name": "Technical Leadership"
+    },
+    {
+      "id": 37,
+      "name": "Solution Architecture"
+    },
+    {
+      "id": 38,
+      "name": "BOM Analysis"
+    },
+    {
+      "id": 39,
+      "name": "Supply Chain Design"
+    },
+    {
+      "id": 40,
+      "name": "Stakeholder Management"
+    },
+    {
+      "id": 41,
+      "name": "Technology Strategy"
+    },
+    {
+      "id": 42,
+      "name": "Data Governance"
+    },
+    {
+      "id": 43,
+      "name": "Critical Materials Management"
+    },
+    {
+      "id": 44,
+      "name": "Time Series Forecasting"
+    },
+    {
+      "id": 45,
+      "name": "Econometric Modeling"
+    },
+    {
+      "id": 46,
+      "name": "Statistical Simulation"
+    },
+    {
+      "id": 47,
+      "name": "Linear Programming"
+    },
+    {
+      "id": 48,
+      "name": "Gurobi"
+    },
+    {
+      "id": 49,
+      "name": "Churn Analysis"
+    },
+    {
+      "id": 50,
+      "name": "Revenue Modeling"
+    },
+    {
+      "id": 51,
+      "name": "Financial Modeling"
+    },
+    {
+      "id": 52,
+      "name": "Cost Analysis"
+    },
+    {
+      "id": 53,
+      "name": "Supply Chain Diagnostics"
+    },
+    {
+      "id": 54,
+      "name": "Workshop Facilitation"
+    },
+    {
+      "id": 55,
+      "name": "ETL / Data Integration"
+    },
+    {
+      "id": 56,
+      "name": "What-if Scenario Analysis"
+    },
+    {
+      "id": 57,
+      "name": "Demand Sensing"
+    },
+    {
+      "id": 58,
+      "name": "ESG / Sustainability"
+    },
+    {
+      "id": 59,
+      "name": "Agroforestry"
+    },
+    {
+      "id": 60,
+      "name": "Land Use Planning"
+    },
+    {
+      "id": 61,
+      "name": "Data Visualization"
+    },
+    {
+      "id": 62,
+      "name": "S&OP"
+    },
+    {
+      "id": 63,
+      "name": "Capacity Planning"
+    },
+    {
+      "id": 64,
+      "name": "Executive Communication"
+    },
+    {
+      "id": 65,
+      "name": "Power Query"
+    },
+    {
+      "id": 66,
+      "name": "Machine Learning"
+    },
+    {
+      "id": 67,
+      "name": "CPFR"
+    },
+    {
+      "id": 68,
+      "name": "ABC Analysis"
+    },
+    {
+      "id": 69,
+      "name": "Forecast Value Add (FVA)"
+    },
+    {
+      "id": 70,
+      "name": "Days of Inventory (DOI)"
+    },
+    {
+      "id": 71,
+      "name": "SmartSheet"
+    },
+    {
+      "id": 72,
+      "name": "Replenishment Planning"
+    },
+    {
+      "id": 73,
+      "name": "Service Level Optimization"
+    }
+  ]
+}

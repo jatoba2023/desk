@@ -1,0 +1,66 @@
+[
+  {
+    "id": 3,
+    "title": "Possivel resposta da Accenture",
+    "date": "2026-03-13",
+    "note": "",
+    "created_on": "2026-03-08"
+  },
+  {
+    "id": 4,
+    "title": "Prazo para imposto de renda americano",
+    "date": "2026-04-15",
+    "note": "",
+    "created_on": "2026-03-09"
+  },
+  {
+    "id": 5,
+    "title": "Prazo imposto de renda Brasil",
+    "date": "2026-05-29",
+    "note": "",
+    "created_on": "2026-03-09"
+  },
+  {
+    "id": 6,
+    "title": "Pagamento UAS",
+    "date": "2026-04-08",
+    "note": "",
+    "created_on": "2026-03-09",
+    "recurrence": {
+      "freq": "monthly",
+      "until_year": 2035
+    }
+  },
+  {
+    "id": 7,
+    "title": "Visita Baltazar",
+    "date": "2026-03-20",
+    "note": "",
+    "created_on": "2026-03-09"
+  },
+  {
+    "id": 8,
+    "title": "Pagar financiamento Bronco",
+    "date": "2026-03-24",
+    "note": "",
+    "created_on": "2026-03-09"
+  },
+  {
+    "id": 9,
+    "title": "Poker Mar\u00e7co",
+    "date": "2026-03-12",
+    "note": "",
+    "created_on": "2026-03-10",
+    "time_start": "23:00",
+    "time_end": "01:00"
+  },
+  {
+    "id": 10,
+    "title": "Comemoracao Luciano",
+    "date": "2026-03-28",
+    "note": "Fazenda Estrela Dalva",
+    "created_on": "2026-03-10",
+    "time_start": "12:01",
+    "time_end": "18:00"
+  }
+]

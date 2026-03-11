@@ -176,6 +176,56 @@ def fmt_date(iso: str) -> str:
     d = date.fromisoformat(iso)
     return d.strftime("%b %-d, %Y")
 
+def parse_time(raw: str):
+    """Parse time string into HH:MM (24h). Returns None if unparseable."""
+    raw = raw.strip().lower().replace(".", ":")
+    # HH:MM or H:MM
+    m = re.match(r'^(\d{1,2}):(\d{2})\s*(am|pm)?$', raw)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2)), m.group(3)
+        if ap == "pm" and h != 12: h += 12
+        if ap == "am" and h == 12: h = 0
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return f"{h:02d}:{mi:02d}"
+    # HHMM (e.g. 0930, 1430)
+    m = re.match(r'^(\d{2})(\d{2})\s*(am|pm)?$', raw)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2)), m.group(3)
+        if ap == "pm" and h != 12: h += 12
+        if ap == "am" and h == 12: h = 0
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return f"{h:02d}:{mi:02d}"
+    # Plain hour: "9", "14", "9am", "2pm"
+    m = re.match(r'^(\d{1,2})\s*(am|pm)?$', raw)
+    if m:
+        h, ap = int(m.group(1)), m.group(2)
+        if ap == "pm" and h != 12: h += 12
+        if ap == "am" and h == 12: h = 0
+        if not ap and h > 12: pass  # assume 24h
+        if 0 <= h <= 23:
+            return f"{h:02d}:00"
+    return None
+
+def fmt_time(t: str) -> str:
+    """Format HH:MM to display as 9:00am / 2:30pm."""
+    h, m = int(t[:2]), int(t[3:])
+    ap = "am" if h < 12 else "pm"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d}{ap}" if m else f"{h12}{ap}"
+
+def prompt_time(label):
+    """Prompt for optional time. Returns HH:MM string or ''."""
+    hint = "9am / 14:30 / 9:00am / leave blank"
+    while True:
+        raw = prompt(label, required=False, hint=hint)
+        if not raw:
+            return ""
+        t = parse_time(raw)
+        if t:
+            print(colorize(f"  ✓  {fmt_time(t)}", GREEN))
+            return t
+        print(colorize(f'  ✗  Could not understand "{raw}". Try: 9am, 14:30, 9:00am', RED))
+
 # ── Urgency scoring (lower = more urgent) ─────────────────────────────────────
 def urgency_score(task) -> tuple:
     """Returns (done, overdue_inv, days) for sorting: done tasks last."""
@@ -268,6 +318,8 @@ def show_tasks(include_done=False):
           colorize(" · ", GRAY) +
           colorize("tsk <id> done", CYAN) +
           colorize(" · ", GRAY) +
+          colorize("tsk <id> edit", CYAN) +
+          colorize(" · ", GRAY) +
           colorize("tsk <id> delete", CYAN))
     print()
 
@@ -300,6 +352,16 @@ def _print_task_row(t, force_done=False):
         detail += colorize(fmt_date(t["due"]), CYAN if not is_done else GRAY)
     else:
         detail += colorize("no due date", GRAY + DIM)
+
+    # Time
+    ts = t.get("time_start", "")
+    te = t.get("time_end", "")
+    if ts:
+        time_str = fmt_time(ts)
+        if te:
+            time_str += f"–{fmt_time(te)}"
+        detail += colorize(f"  {time_str}", MAGENTA if not is_done else GRAY)
+
     detail += days_str
     if note:
         detail += colorize(f"  ·  {note}", GRAY + DIM)
@@ -381,7 +443,9 @@ def add_task(prefill_name=None, prefill_due=None):
             else:
                 print(colorize(f'  ✗  Could not understand "{due_raw}". Try: tomorrow, monday, next week, 2026-12-25', RED))
 
-    note = prompt("Note", required=False, hint="optional")
+    note       = prompt("Note", required=False, hint="optional")
+    time_start = prompt_time("Start time")
+    time_end   = prompt_time("End time") if time_start else ""
 
     tasks = load_tasks()
     entry = {
@@ -392,14 +456,23 @@ def add_task(prefill_name=None, prefill_due=None):
         "done":       False,
         "created_on": date.today().isoformat(),
     }
+    if time_start:
+        entry["time_start"] = time_start
+    if time_end:
+        entry["time_end"] = time_end
 
     tasks.append(entry)
     save_tasks(tasks)
 
     print()
     due_display = colorize(fmt_date(due_iso), CYAN) if due_iso else colorize("no due date", GRAY)
+    time_display = ""
+    if entry.get("time_start"):
+        ts = fmt_time(entry["time_start"])
+        te = f"–{fmt_time(entry['time_end'])}" if entry.get("time_end") else ""
+        time_display = colorize(f"  ·  {ts}{te}", MAGENTA)
     print(colorize(f"  ✓  #{entry['id']} {name}", GREEN + BOLD) +
-          colorize("  ·  ", GRAY) + due_display)
+          colorize("  ·  ", GRAY) + due_display + time_display)
     print()
 
 # ── Done ───────────────────────────────────────────────────────────────────────
@@ -441,6 +514,132 @@ def delete_task(tid: int):
     else:
         print(colorize("  Cancelled.\n", GRAY))
 
+# ── Edit ───────────────────────────────────────────────────────────────────────
+def edit_task(tid: int):
+    tasks = load_tasks()
+    match = next((t for t in tasks if t["id"] == tid), None)
+    if not match:
+        print(colorize(f"\n  ✗  No task with id #{tid}.\n", RED))
+        return
+
+    print()
+    print(colorize(f"  ✦  Edit Task #{tid}", BOLD + WHITE))
+    print(colorize("  Press Enter to keep current value.\n", GRAY))
+
+    def pedit(label, current):
+        val = input(
+            colorize(f"  {label}", CYAN + BOLD) +
+            colorize(f" [{current}]", GRAY) +
+            colorize(" › ", GRAY)
+        ).strip()
+        return val if val else current
+
+    # Name
+    new_name = pedit("Name", match["name"])
+
+    # Due date
+    current_due_display = fmt_date(match["due"]) if match.get("due") else "none"
+    while True:
+        raw = input(
+            colorize("  Due date", CYAN + BOLD) +
+            colorize(f" [{current_due_display}]", GRAY) +
+            colorize(" › ", GRAY)
+        ).strip()
+        if not raw:
+            new_due = match.get("due")
+            break
+        if raw.lower() in ("none", "clear", "-"):
+            new_due = None
+            break
+        parsed = parse_due(raw)
+        if parsed and parsed.startswith("ambiguous:"):
+            _, day_name, this_iso, next_iso = parsed.split(":")
+            day_cap = day_name.capitalize()
+            print(colorize(f"\n  Today is {day_cap}. Did you mean:", YELLOW))
+            print(colorize("    1  ", CYAN + BOLD) + colorize(f"Today  ({fmt_date(this_iso)})", WHITE))
+            print(colorize("    2  ", CYAN + BOLD) + colorize(f"Next {day_cap}  ({fmt_date(next_iso)})", WHITE))
+            print()
+            choice = input(colorize("  Choice", CYAN + BOLD) + colorize(" › ", GRAY)).strip()
+            if choice == "1":
+                new_due = this_iso
+            elif choice == "2":
+                new_due = next_iso
+            else:
+                print(colorize("  ✗  Please enter 1 or 2.", RED))
+                continue
+            print(colorize(f"  ✓  {fmt_date(new_due)}", GREEN))
+            break
+        elif parsed:
+            d = days_until(parsed)
+            if d < 0:
+                print(colorize(f"  ✓  {fmt_date(parsed)} — {abs(d)} days ago", YELLOW))
+            else:
+                print(colorize(f"  ✓  {fmt_date(parsed)}", GREEN) +
+                      colorize(f"  ({d} days)" if d > 0 else "  (today)", GRAY))
+            new_due = parsed
+            break
+        else:
+            print(colorize(f'  ✗  Could not understand "{raw}". Try: tomorrow, monday, 2026-12-25, none', RED))
+
+    # Note
+    new_note = pedit("Note", match.get("note") or "")
+
+    # Start time
+    current_ts = fmt_time(match["time_start"]) if match.get("time_start") else "none"
+    ts_raw = input(
+        colorize("  Start time", CYAN + BOLD) +
+        colorize(f" [{current_ts}]", GRAY) +
+        colorize(" › ", GRAY)
+    ).strip()
+    if not ts_raw:
+        new_ts = match.get("time_start", "")
+    elif ts_raw.lower() in ("none", "clear", "-"):
+        new_ts = ""
+    else:
+        new_ts = parse_time(ts_raw) or match.get("time_start", "")
+
+    # End time (only prompt if we have a start time)
+    if new_ts:
+        current_te = fmt_time(match["time_end"]) if match.get("time_end") else "none"
+        te_raw = input(
+            colorize("  End time", CYAN + BOLD) +
+            colorize(f" [{current_te}]", GRAY) +
+            colorize(" › ", GRAY)
+        ).strip()
+        if not te_raw:
+            new_te = match.get("time_end", "")
+        elif te_raw.lower() in ("none", "clear", "-"):
+            new_te = ""
+        else:
+            new_te = parse_time(te_raw) or match.get("time_end", "")
+    else:
+        new_te = ""
+
+    # Apply changes
+    match["name"] = new_name
+    match["due"]  = new_due
+    match["note"] = new_note
+    if new_ts:
+        match["time_start"] = new_ts
+    else:
+        match.pop("time_start", None)
+    if new_te:
+        match["time_end"] = new_te
+    else:
+        match.pop("time_end", None)
+
+    save_tasks(tasks)
+
+    print()
+    due_display = colorize(fmt_date(new_due), CYAN) if new_due else colorize("no due date", GRAY)
+    time_display = ""
+    if new_ts:
+        te_str = f"–{fmt_time(new_te)}" if new_te else ""
+        time_display = colorize(f"  ·  {fmt_time(new_ts)}{te_str}", MAGENTA)
+    print(colorize(f"  ✓  #{tid} {new_name}", GREEN + BOLD) +
+          colorize("  ·  ", GRAY) + due_display + time_display)
+    print()
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     args = sys.argv[1:]
@@ -474,8 +673,10 @@ def main():
             mark_done(tid)
         elif cmd in ("delete", "del", "rm", "remove"):
             delete_task(tid)
+        elif cmd == "edit":
+            edit_task(tid)
         else:
-            print(colorize(f"\n  ✗  Unknown action '{cmd}'. Use: done | delete\n", RED))
+            print(colorize(f"\n  ✗  Unknown action '{cmd}'. Use: done | delete | edit\n", RED))
         return
 
     print(colorize(f"\n  ✗  Unknown command: {' '.join(args)}\n", RED))
@@ -487,6 +688,7 @@ def _usage():
     print(colorize("    tsk add           ", CYAN) + colorize("Add a task", GRAY))
     print(colorize("    tsk list          ", CYAN) + colorize("Show all tasks (incl. done)", GRAY))
     print(colorize("    tsk <id> done     ", CYAN) + colorize("Mark task as done", GRAY))
+    print(colorize("    tsk <id> edit     ", CYAN) + colorize("Edit a task", GRAY))
     print(colorize("    tsk <id> delete   ", CYAN) + colorize("Delete a task", GRAY))
     print()
 

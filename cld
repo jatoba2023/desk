@@ -172,7 +172,33 @@ def parse_date(raw: str):
 
     return None
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+def parse_time(raw: str):
+    """Parse time string → 'HH:MM' or '' on failure.
+    Accepts: 9am  9:30am  14:30  930  0930  14h  9h30"""
+    import re as _re
+    raw = raw.strip().lower().replace("h",":")
+    # 12-hour with am/pm: 9am, 9:30am, 930am
+    m = _re.match(r'^(\d{1,2})(?::?(\d{2}))?\s*(am|pm)$', raw)
+    if m:
+        h, mn, ap = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+        if ap == "pm" and h != 12: h += 12
+        if ap == "am" and h == 12: h = 0
+        if 0 <= h <= 23 and 0 <= mn <= 59:
+            return f"{h:02d}:{mn:02d}"
+    # 24-hour: 14:30 or 1430
+    m = _re.match(r'^(\d{1,2}):(\d{2})$', raw)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mn <= 59:
+            return f"{h:02d}:{mn:02d}"
+    m = _re.match(r'^(\d{2})(\d{2})$', raw)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mn <= 59:
+            return f"{h:02d}:{mn:02d}"
+    return ""
+
+
 MONTH_NAMES = ["","January","February","March","April","May","June",
                "July","August","September","October","November","December"]
 DAY_ABBR    = ["Mo","Tu","We","Th","Fr","Sa","Su"]
@@ -662,6 +688,12 @@ def add_event():
             end_iso = ""
 
     note      = prompt("Note", required=False, hint="optional")
+
+    ts_raw = prompt("Start time", required=False, hint="optional, e.g. 9am  14:30")
+    te_raw = prompt("End time",   required=False, hint="optional")
+    time_start = parse_time(ts_raw) if ts_raw else ""
+    time_end   = parse_time(te_raw) if te_raw else ""
+
     recurrence = prompt_recurrence()
 
     events = load_events()
@@ -674,6 +706,10 @@ def add_event():
     }
     if end_iso:
         entry["end_date"] = end_iso
+    if time_start:
+        entry["time_start"] = time_start
+    if time_end:
+        entry["time_end"] = time_end
     if recurrence:
         entry["recurrence"] = recurrence
 
@@ -860,6 +896,183 @@ def edit_event(eid: int):
         print()
 
 
+# ── Week view (cld show) ───────────────────────────────────────────────────────
+HOUR_SHOW_START = 8
+HOUR_SHOW_END   = 18
+
+def render_week(week_start: date):
+    today  = date.today()
+    W      = min(term_width(), 132)
+    GUTTER = 5
+    SEPS   = 7
+    COL_W  = (W - GUTTER - SEPS) // 7
+
+    days = [week_start + timedelta(days=i) for i in range(7)]
+
+    # ── Collect events for each day ───────────────────────────────────────────
+    # occ[day_idx][hour_slot] = (title, is_start) or None
+    events    = load_events()
+    bdays     = load_birthdays()
+    occ       = [[None] * (HOUR_SHOW_END - HOUR_SHOW_START + 1) for _ in range(7)]
+    allday    = [[] for _ in range(7)]   # all-day / no-time items per day
+
+    def place(day_i, sh, em_end, eh, title, color_hint="cld"):
+        """Mark hour slots for an event."""
+        end_h = eh if em_end == 0 else eh + 1
+        for h in range(sh, end_h):
+            slot = h - HOUR_SHOW_START
+            if 0 <= slot <= HOUR_SHOW_END - HOUR_SHOW_START:
+                is_start = (h == sh)
+                occ[day_i][slot] = (title, is_start, color_hint)
+
+    for di, day in enumerate(days):
+        # cld events
+        for e in events:
+            skips = set(e.get("skips", []))
+            ed    = date.fromisoformat(e["date"])
+            # base or recurring occurrence on this day?
+            occurs_today = False
+            if sameday(ed, day) and ed.isoformat() not in skips:
+                occurs_today = True
+            elif e.get("recurrence"):
+                for occ_date in recurring_occurrences(e, day.year, day.month):
+                    if sameday(occ_date, day):
+                        occurs_today = True
+                        break
+
+            if not occurs_today:
+                continue
+
+            ts = e.get("time_start", "")
+            te = e.get("time_end",   "")
+            if ts:
+                sh = int(ts[:2]); sm = int(ts[3:])
+                if te:
+                    eh = int(te[:2]); em = int(te[3:])
+                else:
+                    eh = sh + 1; em = 0
+                place(di, sh, em, eh, e["title"])
+            else:
+                allday[di].append(("◆ " + e["title"], "cld"))
+
+        # birthdays
+        for b in bdays:
+            try:
+                bd = date(day.year, b["month"], b["day"])
+            except ValueError:
+                continue
+            if sameday(bd, day):
+                allday[di].append(("🎂 " + b["name"], "bday"))
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    lo, hi = days[0], days[6]
+    same_mo = lo.month == hi.month
+    span = (f"{MONTH_NAMES[lo.month]} {lo.day}–{hi.day}, {lo.year}"
+            if same_mo else
+            f"{MONTH_NAMES[lo.month][:3]} {lo.day} – {MONTH_NAMES[hi.month][:3]} {hi.day}, {lo.year}")
+
+    print()
+    print(colorize("  desk", BOLD + WHITE) + colorize(" · ", GRAY) +
+          colorize("week", CYAN + BOLD) +
+          colorize(f"  {span}", GRAY) +
+          colorize("   ◀ cld show prev", DIM + GRAY) +
+          colorize("   cld show next ▶", DIM + GRAY))
+    print(colorize("  " + "─" * (W - 4), GRAY))
+
+    # Day name + date row
+    row = " " * GUTTER
+    for i, day in enumerate(days):
+        wd        = DAY_NAMES[(day.weekday())]
+        label     = f"{wd[:3].upper()} {day.day}"
+        padded    = label.center(COL_W)
+        is_today  = sameday(day, today)
+        is_wknd   = day.weekday() >= 5
+        sep       = colorize("│" if i > 0 else " ", GRAY)
+        if is_today:
+            row += sep + colorize(padded, BOLD + WHITE + "\033[44m")
+        elif is_wknd:
+            row += sep + colorize(padded, GRAY)
+        else:
+            row += sep + colorize(padded, DIM + WHITE)
+    print(row)
+
+    # All-day pills row (if any day has them)
+    if any(allday):
+        pill_row = " " * GUTTER
+        for i, items in enumerate(allday):
+            sep = colorize("│" if i > 0 else " ", GRAY)
+            if items:
+                title, kind = items[0]
+                COLOR = YELLOW if kind == "bday" else MAGENTA
+                raw   = title[:COL_W]
+                pill_row += sep + colorize(raw.ljust(COL_W)[:COL_W], COLOR + DIM)
+            else:
+                pill_row += sep + " " * COL_W
+        print(pill_row)
+
+    # Divider
+    div = " " * GUTTER
+    for i in range(7):
+        div += colorize("┼", GRAY) + colorize("─" * COL_W, GRAY)
+    print(div)
+
+    # ── Hour rows ─────────────────────────────────────────────────────────────
+    for hi_idx, hour in enumerate(range(HOUR_SHOW_START, HOUR_SHOW_END + 1)):
+        h12  = hour % 12 or 12
+        ap   = "am" if hour < 12 else "pm"
+        glbl = f"{h12}{ap}" if hour != 12 else "12pm"
+        gstr = colorize(f"{glbl:>4} ", GRAY)
+
+        row = gstr
+        for di, day in enumerate(days):
+            sep     = colorize("│", GRAY)
+            slot    = occ[di][hi_idx] if hi_idx < len(occ[di]) else None
+            is_wknd = day.weekday() >= 5
+            is_td   = sameday(day, today)
+
+            if slot:
+                title, is_start, _ = slot
+                bar_w    = 4
+                space    = COL_W - bar_w - 1
+                if is_start:
+                    shown = title[:space] if space > 0 else ""
+                    cell  = ("████ " + shown).ljust(COL_W)[:COL_W]
+                    row  += sep + colorize(cell, MAGENTA + BOLD)
+                else:
+                    shown = title[:COL_W - 4]
+                    cell  = ("╎   " + shown).ljust(COL_W)[:COL_W]
+                    row  += sep + colorize(cell, MAGENTA + DIM)
+            else:
+                fill = ("░" * COL_W)[:COL_W]
+                if is_wknd:
+                    row += sep + colorize(fill, GRAY + DIM)
+                elif is_td:
+                    row += sep + colorize(fill, "\033[90m\033[2m")
+                else:
+                    row += sep + colorize(fill, "\033[38;5;236m")
+
+        print(row)
+
+    # Bottom border
+    bot = " " * GUTTER
+    for _ in range(7):
+        bot += colorize("┴", GRAY) + colorize("─" * COL_W, GRAY)
+    print(bot)
+
+    # Footer
+    print()
+    print(colorize("  ", GRAY) +
+          colorize("◆ event", MAGENTA) +
+          colorize("  🎂 birthday", YELLOW) +
+          colorize("   cld show · cld show next · cld show prev · cld add", GRAY))
+    print()
+
+def sameday(a: date, b: date) -> bool:
+    return a.year == b.year and a.month == b.month and a.day == b.day
+
+def week_monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     args  = sys.argv[1:]
@@ -875,6 +1088,18 @@ def main():
             if m > 12:
                 m, y = 1, y + 1
         render_months(months)
+        return
+
+    # cld show  /  cld show next  /  cld show prev
+    if args[0] == "show":
+        if len(args) == 1:
+            render_week(week_monday(today))
+        elif args[1] == "next":
+            render_week(week_monday(today) + timedelta(weeks=1))
+        elif args[1] == "prev":
+            render_week(week_monday(today) - timedelta(weeks=1))
+        else:
+            print(colorize(f"\n  ✗  Unknown: cld show {args[1]}\n", RED))
         return
 
     # cld agenda
@@ -943,6 +1168,9 @@ def _usage():
         ("cld next",         "Next month"),
         ("cld prev",         "Previous month"),
         ("cld 2026-08",      "Specific month"),
+        ("cld show",         "Weekly view (current week)"),
+        ("cld show next",    "Weekly view (next week)"),
+        ("cld show prev",    "Weekly view (previous week)"),
         ("cld agenda",       "Agenda for next 60 days"),
         ("cld agenda 30",    "Agenda for next N days"),
         ("cld add",          "Add a new event"),
