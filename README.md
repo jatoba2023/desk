@@ -60,7 +60,7 @@ Python must be installed first. Download from [python.org](https://www.python.or
 
 **Step 1 — Create an install folder:** `C:\desk\`
 
-**Step 2 — Place the scripts there** and rename each one with a `.py` extension:
+**Step 2 — Place the scripts there** and rename each with a `.py` extension:
 ```
 C:\desk\bday.py
 C:\desk\tsk.py
@@ -106,7 +106,7 @@ pln
 
 All tools store data as plain JSON in your home directory. Move the files into your pCloud folder and replace them with symlinks to sync across machines.
 
-**Linux / macOS:**
+**Linux / macOS — first machine:**
 ```bash
 mkdir -p ~/pCloudDrive/Apps/desk
 
@@ -123,7 +123,16 @@ ln -s ~/pCloudDrive/Apps/desk/.xp.json   ~/.xp.json
 ln -s ~/pCloudDrive/Apps/desk/.pln.json  ~/.pln.json
 ```
 
-**Windows (run PowerShell as Administrator):**
+**Linux / macOS — second machine** (files already in pCloud):
+```bash
+ln -s ~/pCloudDrive/Apps/desk/.bday.json ~/.bday.json
+ln -s ~/pCloudDrive/Apps/desk/.tsk.json  ~/.tsk.json
+ln -s ~/pCloudDrive/Apps/desk/.cld.json  ~/.cld.json
+ln -s ~/pCloudDrive/Apps/desk/.xp.json   ~/.xp.json
+ln -s ~/pCloudDrive/Apps/desk/.pln.json  ~/.pln.json
+```
+
+**Windows — first machine (run PowerShell as Administrator):**
 ```powershell
 $desk = "$env:USERPROFILE\pCloudDrive\Apps\desk"
 New-Item -ItemType Directory -Force -Path $desk
@@ -141,15 +150,6 @@ New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.xp.json"   -Target "$de
 New-Item -ItemType SymbolicLink -Path "$env:USERPROFILE\.pln.json"  -Target "$desk\.pln.json"
 ```
 
-**On a second machine**, pCloud already has the files — just create the symlinks:
-```bash
-ln -s ~/pCloudDrive/Apps/desk/.bday.json ~/.bday.json
-ln -s ~/pCloudDrive/Apps/desk/.tsk.json  ~/.tsk.json
-ln -s ~/pCloudDrive/Apps/desk/.cld.json  ~/.cld.json
-ln -s ~/pCloudDrive/Apps/desk/.xp.json   ~/.xp.json
-ln -s ~/pCloudDrive/Apps/desk/.pln.json  ~/.pln.json
-```
-
 ---
 
 ## bday — Birthday Manager
@@ -159,11 +159,11 @@ bday                    Show upcoming birthdays (next 30 days)
 bday add                Add a birthday
 bday list               List all birthdays sorted by date
 bday all                Alias for bday list
-bday remove <n>         Remove a birthday (fuzzy name match)
+bday remove <name>      Remove a birthday (fuzzy name match)
 ```
 
 Birthdays within 30 days are shown with urgency badges: **TODAY**, **TOMORROW**, **THIS WEEK**.  
-Provide a birth year to display the person's upcoming age. An optional notes field is available.
+Provide a birth year to display the person's upcoming age.
 
 **Example:**
 ```
@@ -196,9 +196,10 @@ tsk <id> edit           Edit a task
 tsk <id> delete         Delete a task
 ```
 
-Tasks are automatically ranked by due date: overdue → today → tomorrow → this week → future. Completed tasks appear with strikethrough at the bottom of `tsk list`.
+Tasks are automatically ranked by due date: overdue → today → tomorrow → this week → future.  
+Completed tasks appear with strikethrough at the bottom of `tsk list`.
 
-When adding or editing a task, you can optionally provide a **start time** and **end time** (displayed in magenta).
+When adding or editing a task, you can optionally set a **start time** and **end time** (displayed in magenta in the task list). End time is only prompted if a start time is given.
 
 **Accepted due date formats:**
 
@@ -227,34 +228,34 @@ If the weekday you type matches today (e.g. you type `monday` and today is Monda
     "note": "",
     "done": false,
     "created_on": "2026-03-01",
-    "start_time": "09:00",
-    "end_time": "10:30"
+    "time_start": "09:00",
+    "time_end": "10:30"
   }
 ]
 ```
-`note`, `start_time`, and `end_time` are optional.
+`note`, `time_start`, and `time_end` are optional.
 
 ---
 
 ## cld — Calendar
 
 ```
-cld                     Show current month + next 2 months as a list
+cld                     Show current month + next 2 months
 cld next                Next month
 cld prev                Previous month
 cld 2026-08             Jump to a specific month
-cld agenda              Chronological list for next 60 days
-cld agenda 30           Agenda for next N days
+cld agenda              Chronological list for the next 60 days
+cld agenda 30           Agenda for the next N days
 cld add                 Add a new event
-cld list                List all cld events with IDs and urgency badges
+cld list                List all events with IDs and urgency badges
 cld <id> edit           Edit an event
 cld <id> delete         Delete an event
-cld show                Weekly view (current week, Mon–Sun, 08:00–18:00)
-cld show next           Weekly view for next week
-cld show prev           Weekly view for previous week
+cld show                Weekly view — current week (Mon–Sun, 08:00–18:00)
+cld show next           Weekly view — next week
+cld show prev           Weekly view — previous week
 ```
 
-The calendar pulls data from all three sources automatically:
+The calendar automatically merges data from all three sources:
 
 - **Magenta** `ev ◆` — events from `cld`
 - **Cyan** `tk ✦` — tasks with a due date from `tsk`
@@ -262,15 +263,15 @@ The calendar pulls data from all three sources automatically:
 
 ### Recurring events
 
-When adding an event, you can mark it as recurring. Supported frequencies: daily, weekly, monthly, yearly. You will be asked for a stop year.
+When adding an event you can mark it as recurring. Supported frequencies: daily, weekly, monthly, yearly. You will also be asked for a stop year.
 
 When editing or deleting a recurring event, the app asks whether you want to change the **next occurrence only** or the **entire series**.
 
 ### Weekly view (`cld show`)
 
-Displays a 7-day grid from Monday to Sunday with hourly rows (08:00–18:00). Events with a start time appear as filled blocks in the correct time slot. Navigate with `cld show next` and `cld show prev`.
+Displays a 7-day grid (Monday–Sunday) with hourly rows from 08:00 to 18:00. Events with a start time appear as filled blocks in the correct slot. Navigate with `cld show next` and `cld show prev`.
 
-**Example list output:**
+**Example output:**
 ```
   MARCH  2026
   ──────────────────────────────────────────────
@@ -307,7 +308,7 @@ Displays a 7-day grid from Monday to Sunday with hourly rows (08:00–18:00). Ev
 Track your professional projects with rich context: client, employer, role, skills, functional areas, industry, and narrative fields.
 
 ```
-xp                      List all projects (compact view, sorted by date)
+xp                      List all projects (compact, sorted by date ascending)
 xp full                 List all projects with full detail
 xp add                  Add a project
 xp <id> detail          Full detail of a single project
@@ -315,9 +316,11 @@ xp <id> edit            Edit a project
 xp <id> delete          Delete a project
 xp filter <term>        Search across all fields
 xp export               Export all projects to a Markdown file
-xp summary              Stats overview with bar charts
-xp functional add       Add functional areas
-xp functional list      List functional areas
+xp summary              Stats overview with ranked bar charts
+xp skill                List all skills
+xp industry             List all industries
+xp functional add       Add one or more functional areas
+xp functional list      List all functional areas
 ```
 
 ### Project fields
@@ -339,12 +342,13 @@ xp functional list      List functional areas
 
 ### Taxonomy
 
-Functional areas, industries, and skills are reusable lists. Type `N` at any selection screen to add new items on the fly without leaving the flow.
+Functional areas, industries, and skills are reusable lists. When adding or editing a project, type `N` at any selection screen to add new items on the fly without leaving the flow. Functional areas can also be managed directly with `xp functional add`.
+
+Multi-line fields (business problem, solution, results, lessons) are entered in a multiline prompt. Line breaks (`\n`) entered as `\ ` are stripped before saving.
 
 ### Filter
 
 `xp filter <term>` searches case-insensitively across every field. Multi-word terms work:
-
 ```
 xp filter python
 xp filter financial services
@@ -353,7 +357,7 @@ xp filter data engineering
 
 ### Export
 
-`xp export` saves `xp-export-YYYY-MM-DD.md` in the current directory. Includes Business Problem, Solution, and Results. Lessons is excluded.
+`xp export` saves `xp-export-YYYY-MM-DD.md` in the current directory. Includes Business Problem, Solution, and Results. The Lessons field is intentionally excluded.
 
 ### Data format — `~/.xp.json`
 
@@ -388,7 +392,7 @@ xp filter data engineering
 
 ## pln — Project Planner
 
-`pln` is a full project management tool with ALAP scheduling, dependency tracking, resource allocation, and HTML report generation. The interface is a **hybrid TUI shell**: each command clears and redraws the screen, keeping the Gantt chart and task list always visible.
+`pln` is a full project management tool with ALAP scheduling, dependency tracking, resource allocation with quantities, date window constraints, and HTML report generation. The interface is a **hybrid TUI shell** — each command clears and redraws the screen, keeping the Gantt chart and task list always visible.
 
 The interface language is **Portuguese**.
 
@@ -398,87 +402,94 @@ pln                     Open the interactive TUI
 
 ### Project selection screen
 
-On launch, `pln` shows a list of active projects.
+On launch, `pln` shows a list of active projects with a progress bar and target date for each.
 
 | Key | Action |
 |-----|--------|
 | `1`, `2`, … | Open that project |
-| `N` | Create a new project |
-| `A` | Archive a project (hides from list, data preserved) |
-| `D` | Unarchive a project |
+| `N` | Create a new project inline |
+| `A` | Archive a project — hides from list, data preserved |
+| `D` | Restore an archived project |
 | `S` | Quit |
+
+Archived projects remain in `~/.pln.json` with `"archived": true` and can be restored at any time with `D`.
 
 ### Project shell commands
 
-Once a project is open, the screen shows a Gantt chart sorted by earliest start date and a task list below it. All commands are typed at the prompt.
+Once a project is open, the screen shows a Gantt chart (top) and a task list (bottom). All commands are typed at the `pln #id ›` prompt.
 
 ```
 task add                Add a new task
-task <n> edit           Edit a task (resources pre-filled, adjustable)
+task <n> edit           Edit a task
 task <n> done           Mark done — dependent tasks are recalculated
 task <n> delete         Delete a task
 recurso add             Add a resource to this project
-recurso list            List resources by category
+recurso list            List resources grouped by category
 recurso delete <n>      Remove a resource
 edit                    Edit project name or target date
-report                  Generate an HTML executive report
-projetos                Return to project selection
+report                  Generate and open an HTML executive report
+projetos                Return to the project selection screen
 sair                    Quit
 ```
 
 ### Scheduling
 
-The scheduler uses **ALAP (As Late As Possible)** — tasks are pushed as close to the target date as possible. Marking a task done recalculates all dependents using the actual completion date.
+The scheduler uses **ALAP (As Late As Possible)**: tasks are pushed as close to the target date as possible. Marking a task as done recalculates all dependent tasks using the actual completion date.
 
 **Dependency types:**
 
-| Type | Meaning |
-|------|---------|
-| `FI` (Fim→Início) | B starts when A finishes |
-| `II` (Início→Início) | B starts when A starts |
+| Type | Meaning | Lag |
+|------|---------|-----|
+| `FI` (Fim→Início) | B starts after A finishes | `+n` days delay, `-n` days overlap |
+| `II` (Início→Início) | B starts when A starts | `+n` days delay, `-n` days overlap |
 
-Both support a **lag** in days (positive = delay, negative = overlap).
+Multiple predecessors are supported; the most restrictive constraint wins.
 
 ### Window constraints
 
-Tasks can have an optional date window (`window_start` and/or `window_end`) to force them into a specific period — for example, purchasing materials during a low-season window. If the ALAP schedule conflicts with the window, the window wins and a warning is shown:
+A task can have an optional date window (`window_start` and/or `window_end`) to anchor it to a specific period — for example, purchasing supplies during a low-season window. After ALAP scheduling, the window is applied as a clamp. If there is a conflict with the predecessors, the window wins and a yellow warning is shown in the task list:
 
 ```
 ⚠ fim forçado para 30 Jun 2026 (janela)
 ```
 
-In the Gantt: magenta bars have a window, yellow bars have a conflict.
+Window constraints are shown as `[≥01 Mai 2026  ≤30 Jun 2026]` in magenta next to the task.
 
 ### Resources
 
-Resources belong to a project and have three categories: **Mão de Obra**, **Equipamento**, **Insumos**. Each has a name and a daily cost in R$.
+Resources belong to a project and have three categories: **Mão de Obra**, **Equipamento**, **Insumos**. Each has a name and a daily cost (`custo_dia` in R$).
 
-When assigning a resource to a task, you specify a **quantity**. Cost = `custo_dia × qty × duration_days`. Displayed as `Engenheiro (×2)` when qty > 1.
+When assigning resources to a task you specify a **quantity** per resource. Task cost = `custo_dia × qty × duration_days`. Displayed as `Engenheiro (×2)` when quantity > 1, plain name when qty = 1.
 
-When editing task resources, the current allocation is shown with quantities. Press Enter to keep all (and adjust quantities per item), `0` to remove all, or pick a new selection.
+When **editing** a task's resources, the current allocation is shown with its quantities:
+- Press `Enter` to keep all (you can then adjust quantities per item individually)
+- Type `0` to remove all resources
+- Type a new selection by number to replace the allocation
 
 ### Gantt chart
 
-| Color | Meaning |
-|-------|---------|
+Tasks are sorted by earliest start date, then by ID. Date ranges and durations are shown in the task list below, not on the bars.
+
+| Bar color | Meaning |
+|-----------|---------|
 | Cyan | Scheduled, on track |
 | Magenta | Has a window constraint |
-| Yellow | Window conflict with predecessors |
+| Yellow | Window conflict with ALAP schedule |
 | Green | Completed |
 | Red | Projected past target date |
 
-Tasks are sorted by earliest start date, then by ID. Dates and durations are shown in the task list below the chart, not on the bars themselves.
+`▎` marks today's position on the timeline. `◆` marks the target date.
 
 ### HTML Report (`report`)
 
-The `report` command generates `~/pln-report-<id>-<YYYYMMDD>.html` and opens it in the browser. The report includes:
+The `report` command generates `~/pln-report-<id>-<YYYYMMDD>.html` and opens it in the default browser. It contains:
 
-- KPI cards: realized cost, planned total cost, progress, target date
-- Alerts for tasks with risk
-- Executive summary paragraph
-- Proportional Gantt chart with today marker
-- Previsto × Realizado bar chart and deviation table
-- Cost breakdown by resource with percentage share
+- KPI cards: realized cost, planned total cost, progress (done/total), target date
+- Alert chips for tasks with schedule or cost risk
+- Auto-generated executive summary paragraph
+- Proportional Gantt with today marker and color-coded status
+- Previsto × Realizado horizontal bar chart + deviation table (R$ and %)
+- Cost breakdown by resource: category, daily rate, total days, planned cost, % of total
 
 ### Data format — `~/.pln.json`
 
@@ -496,8 +507,8 @@ The `report` command generates `~/pln-report-<id>-<YYYYMMDD>.html` and opens it 
       "tasks": [
         {
           "id": 1,
-          "name": "Pesquisa de mercado",
-          "duration_days": 10,
+          "name": "Compra de mudas",
+          "duration_days": 5,
           "predecessors": [{ "tid": 2, "tipo": "FI", "lag": 0 }],
           "recursos": [{ "rid": 1, "qty": 2 }],
           "window_start": "2026-05-01",
@@ -514,19 +525,20 @@ The `report` command generates `~/pln-report-<id>-<YYYYMMDD>.html` and opens it 
 
 Optional fields: `archived`, `window_start`, `window_end`, `started_on`, `completed_on`. `lag` defaults to `0`, `qty` defaults to `1`.
 
-### Legacy CLI commands
+### Legacy CLI (for scripting)
 
-For scripting, the original one-shot commands still work:
+The original one-shot commands still work:
 
 ```
-pln <id>                        Show project detail
-pln <id> gantt                  Print Gantt chart
-pln <id> edit / delete          Edit or delete project
-pln <id> task add               Add task
-pln <id> task <tid> edit        Edit task
-pln <id> task <tid> done        Mark task done
-pln <id> task <tid> delete      Delete task
-pln <id> recurso add            Add resource
-pln <id> recurso list           List resources
-pln <id> recurso <rid> delete   Delete resource
+pln <id>                         Show project detail
+pln <id> gantt                   Print Gantt chart
+pln <id> edit                    Edit project name / target date
+pln <id> delete                  Delete project
+pln <id> task add                Add task
+pln <id> task <tid> edit         Edit task
+pln <id> task <tid> done         Mark task done
+pln <id> task <tid> delete       Delete task
+pln <id> recurso add             Add resource
+pln <id> recurso list            List resources
+pln <id> recurso <rid> delete    Delete resource
 ```
